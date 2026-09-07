@@ -12,22 +12,18 @@ st.set_page_config(
     page_icon="🏈"
 )
 
-# --- INJECT CUSTOM CSS FOR HEADSHOT ALIGNMENT & VISUALS ---
+# --- INJECT CUSTOM CSS TO PIN HEADSHOTS TO THE BOTTOM ---
 st.markdown("""
     <style>
-    /* Force column containing image to align flush at the bottom */
-    div[data-testid="stColumn"]:first-child {
+    /* Align card columns to the bottom and pin headshots to the bottom edge */
+    div[data-testid="stHorizontalBlock"] {
+        align-items: flex-end !important;
+    }
+    div[data-testid="stHorizontalBlock"] > div:first-child {
         display: flex;
         align-items: flex-end;
         justify-content: center;
-        padding-bottom: 0px !important;
-    }
-    
-    /* Ensure headshot image fills full width and rests on bottom border */
-    div[data-testid="stColumn"]:first-child img {
-        margin-bottom: -6px !important;
-        border-bottom-left-radius: 8px;
-        object-fit: cover;
+        margin-bottom: -16px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -372,7 +368,6 @@ with tab_players:
                             with st.container(border=True):
                                 col_img, col_info = st.columns([1, 2.2])
                                 with col_img:
-                                    # Increased width to 100px so headshots fill the column height
                                     st.image(p["Headshot"], width=100)
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
@@ -382,4 +377,4 @@ with tab_players:
                                         value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
                                     )
                 else:
-                    st.write(f"No active {pos} assets found for selected teams.")
+                    st.write(f"No active {pos} found for selected teams.")
