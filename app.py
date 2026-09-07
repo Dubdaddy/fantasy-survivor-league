@@ -12,10 +12,10 @@ st.set_page_config(
     page_icon="🏈"
 )
 
-# --- INJECT CUSTOM CSS FOR HEADSHOT FRAMING ---
+# --- INJECT CUSTOM CSS FOR HEADSHOT FRAMING & DEAD SPACE REDUCTION ---
 st.markdown("""
     <style>
-    /* Add a clean border, subtle shadow, and light background frame to player headshots */
+    /* Expand image frame to naturally fill left side of card */
     div[data-testid="stColumn"] img {
         border: 1px solid #e0e0e0;
         border-radius: 12px;
@@ -23,6 +23,13 @@ st.markdown("""
         padding: 4px;
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
         object-fit: cover;
+        width: 100% !important;
+        max-width: 115px !important;
+    }
+    
+    /* Vertically center content inside cards */
+    div[data-testid="stContainer"] > div {
+        align-items: center;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -365,9 +372,9 @@ with tab_players:
                     for i, p in enumerate(filtered):
                         with p_cols[i % 3]:
                             with st.container(border=True):
-                                col_img, col_info = st.columns([1, 2])
+                                col_img, col_info = st.columns([1, 1.4])
                                 with col_img:
-                                    st.image(p["Headshot"], width=80)
+                                    st.image(p["Headshot"], width=115)
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
