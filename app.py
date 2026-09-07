@@ -42,36 +42,6 @@ ESPN_LOGOS = {
     "SF": "sf",   "TB": "tb",   "TEN": "ten", "WAS": "was"
 }
 
-# --- BASELINE PROJECTIONS MAP (Fallback for Offseason/Pre-Game) ---
-DEFAULT_PROJECTIONS = {
-    "Caleb Williams": 18.94,
-    "Justin Herbert": 18.10,
-    "Dak Prescott": 18.25,
-    "Anthony Richardson": 17.80,
-    "Daniel Jones": 14.50,
-    "Joe Milton": 5.20,
-    "Tyson Bagent": 4.10,
-    "Riley Leonard": 6.30,
-    "DJ Uiagalelei": 5.00,
-    "Patrick Mahomes": 19.80,
-    "Lamar Jackson": 21.20,
-    "Geno Smith": 15.10,
-    "Kirk Cousins": 15.80,
-    "Jonathan Taylor": 18.70,
-    "D'Andre Swift": 13.40,
-    "Omarion Hampton": 11.20,
-    "Javonte Williams": 12.10,
-    "CeeDee Lamb": 18.50,
-    "Amon-Ra St. Brown": 16.30,
-    "Josh Downs": 11.20,
-    "Ladd McConkey": 12.80,
-    "Rome Odunze": 12.10,
-    "Keenan Allen": 11.90,
-    "Cole Kmet": 9.40,
-    "Travis Kelce": 13.80,
-    "Mark Andrews": 12.20
-}
-
 # --- LOGIN CREDENTIALS ---
 USERS = {
     "Wes": "wes123",        
@@ -122,6 +92,67 @@ def fetch_nfl_players():
     except Exception:
         pass
     return {}
+
+@st.cache_data(ttl=1800)
+def fetch_nfl_state():
+    url = "https://api.sleeper.app/v1/state/nfl"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return {"season": "2026", "week": 1}
+
+@st.cache_data(ttl=900)
+def fetch_weekly_projections(season_year, week_num):
+    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return {}
+
+def get_dynamic_projection(pid, pdata, projections_data):
+    """Dynamically calculates projection score from live API or search rank scaling."""
+    # 1. Direct live projection from Sleeper API
+    if str(pid) in projections_data:
+        stats = projections_data[str(pid)].get("stats", {})
+        if "pts_ppr" in stats and stats["pts_ppr"] is not None:
+            return float(stats["pts_ppr"])
+        
+        # Calculate from raw stats
+        pts = 0.0
+        pts += float(stats.get("pass_yd", 0) or 0) * 0.04
+        pts += float(stats.get("pass_td", 0) or 0) * 4.0
+        pts -= float(stats.get("pass_int", 0) or 0) * 2.0
+        pts += float(stats.get("rush_yd", 0) or 0) * 0.1
+        pts += float(stats.get("rush_td", 0) or 0) * 6.0
+        pts += float(stats.get("rec", 0) or 0) * 1.0
+        pts += float(stats.get("rec_yd", 0) or 0) * 0.1
+        pts += float(stats.get("rec_td", 0) or 0) * 6.0
+        if pts > 0:
+            return round(pts, 2)
+
+    # 2. Dynamic rank scaling fallback (for offseason/depth chart players)
+    rank = pdata.get("search_rank")
+    pos = pdata.get("position")
+
+    if rank is None or rank > 1500:
+        return 2.50
+
+    if pos == "QB":
+        return round(max(4.0, 22.0 - (rank * 0.04)), 2)
+    elif pos in ["RB", "WR"]:
+        return round(max(3.0, 19.0 - (rank * 0.03)), 2)
+    elif pos == "TE":
+        return round(max(2.0, 14.0 - (rank * 0.025)), 2)
+    elif pos in ["K", "DEF"]:
+        return round(max(3.0, 9.0 - (rank * 0.01)), 2)
+
+    return 3.00
 
 players_db = fetch_nfl_players()
 
@@ -178,7 +209,6 @@ with tab_draft:
 
         st.subheader(f"{current_user}'s Draft Room ({selected_week})")
 
-        # Standard Selection
         if len(available_teams) >= 4:
             valid_defaults = [t for t in my_current_picks if t in available_teams]
             
@@ -197,7 +227,6 @@ with tab_draft:
                 else:
                     st.warning("Please select exactly 4 teams.")
 
-        # Week 8 / 16 Wheel Spin Trigger
         else:
             st.warning(f"Only {len(available_teams)} fresh team(s) remaining for selection in Season {season}!")
             valid_defaults = [t for t in my_current_picks if t in available_teams]
@@ -272,12 +301,13 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL
+# TAB 3: DYNAMICALLY SORTED PLAYER POOL
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
     st.subheader("Active Weekly Player Pool")
     p_week_str = st.selectbox("View Player Pool for Week:", [f"Week {w}" for w in range(1, 17)], key="p_week")
+    p_week_num = int(p_week_str.split()[1])
     p_user = st.radio("Select Manager Roster:", ["Wes", "Savanna"], horizontal=True)
 
     active_teams = st.session_state["picks"][p_user][p_week_str]
@@ -287,15 +317,18 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
 
+        nfl_state = fetch_nfl_state()
+        season_year = nfl_state.get("season", "2026")
+        projections_data = fetch_weekly_projections(season_year, p_week_num)
+
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}".strip()
-                rank_val = pdata.get("search_rank")
                 
-                # Fetch projection value
-                p_proj = DEFAULT_PROJECTIONS.get(full_name, 0.00)
+                # Fetch projection dynamically
+                p_proj = get_dynamic_projection(pid, pdata, projections_data)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -306,12 +339,12 @@ with tab_players:
                     "Name": full_name,
                     "Position": pdata.get("position"),
                     "Team": team_code,
-                    "Rank": rank_val if rank_val is not None else 999999,
                     "ProjPPR": p_proj,
                     "Headshot": headshot_url
                 })
 
-        team_players = sorted(team_players, key=lambda x: x["Rank"])
+        # Dynamically sort every position by projected PPR points
+        team_players = sorted(team_players, key=lambda x: x["ProjPPR"], reverse=True)
 
         pos_tabs = st.tabs(["QB", "RB", "WR", "TE", "K", "DEF"])
         positions = ["QB", "RB", "WR", "TE", "K", "DEF"]
@@ -332,7 +365,7 @@ with tab_players:
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     st.metric(
                                         label="Proj PPR Points",
-                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "--"
+                                        value=f"{p['ProjPPR']:.2f}"
                                     )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
