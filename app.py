@@ -21,7 +21,7 @@ NFL_TEAMS = [
 
 # --- LOGIN CREDENTIALS ---
 USERS = {
-    "Wes": "wes123",        # You can update these passwords anytime
+    "Wes": "wes123",        
     "Savanna": "sav123"
 }
 
@@ -101,32 +101,44 @@ with tab_draft:
         opponent = "Savanna" if current_user == "Wes" else "Wes"
         opp_picks_this_week = st.session_state["picks"][opponent][selected_week]
 
-        available_teams = [t for t in NFL_TEAMS if t not in used_by_me and t not in opp_picks_this_week]
+        # Current saved picks for this week
+        my_current_picks = st.session_state["picks"][current_user][selected_week]
+
+        # Used in other weeks of this season (excluding current week's picks)
+        used_other_weeks = [t for t in used_by_me if t not in my_current_picks]
+
+        # Available options must include available fresh teams + currently selected teams
+        available_teams = sorted(list(set([t for t in NFL_TEAMS if t not in used_other_weeks and t not in opp_picks_this_week] + my_current_picks)))
 
         st.subheader(f"{current_user}'s Draft Room ({selected_week})")
 
         # Standard Selection
         if len(available_teams) >= 4:
+            valid_defaults = [t for t in my_current_picks if t in available_teams]
+            
             my_selection = st.multiselect(
                 "Select 4 Teams for this week:",
                 options=available_teams,
-                default=st.session_state["picks"][current_user][selected_week],
+                default=valid_defaults,
                 max_selections=4
             )
             if st.button("🔒 Save Weekly Picks"):
                 if len(my_selection) == 4:
                     st.session_state["picks"][current_user][selected_week] = my_selection
                     st.success(f"Picks locked in for {selected_week}: {', '.join(my_selection)}")
+                    st.rerun()
                 else:
                     st.warning("Please select exactly 4 teams.")
 
         # Week 8 / 16 Wheel Spin Trigger
         else:
             st.warning(f"Only {len(available_teams)} fresh team(s) remaining for selection in Season {season}!")
+            valid_defaults = [t for t in my_current_picks if t in available_teams]
+            
             my_selection = st.multiselect(
                 "Select available fresh team(s):",
                 options=available_teams,
-                default=[t for t in available_teams if t in st.session_state["picks"][current_user][selected_week]]
+                default=valid_defaults
             )
 
             wheel_pool = [t for t in NFL_TEAMS if t not in my_selection and t not in opp_picks_this_week]
@@ -142,6 +154,7 @@ with tab_draft:
                         st.session_state["picks"][current_user][selected_week] = my_selection
                         st.balloons()
                         st.success(f"🎉 The wheel landed on: **{spun_team}**!")
+                        st.rerun()
 
 # ---------------------------------------------------------
 # TAB 2: VISUAL TEAM TRACKING GRID
