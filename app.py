@@ -12,10 +12,10 @@ st.set_page_config(
     page_icon="🏈"
 )
 
-# --- INJECT CUSTOM CSS FOR HEADSHOT FRAMING & DEAD SPACE REDUCTION ---
+# --- INJECT CUSTOM CSS FOR HEADSHOT FRAMING ---
 st.markdown("""
     <style>
-    /* Expand image frame to naturally fill left side of card */
+    /* Headshot framing */
     div[data-testid="stColumn"] img {
         border: 1px solid #e0e0e0;
         border-radius: 12px;
@@ -345,13 +345,19 @@ with tab_players:
                 if str(pid) in projections_data:
                     p_stats = projections_data[str(pid)].get("stats", {})
                     p_proj = calculate_ppr_from_stats(p_stats)
-                    # Pull historical stats average if present in Sleeper payload
                     if "pts_ppr_avg" in p_stats and p_stats["pts_ppr_avg"] is not None:
                         p_avg = float(p_stats["pts_ppr_avg"])
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
+
+                # Extract Sleeper injury status
+                injury_status = pdata.get("injury_status")
+                if not injury_status:
+                    status_str = "Healthy"
+                else:
+                    status_str = str(injury_status).capitalize()
 
                 team_players.append({
                     "ID": pid,
@@ -361,7 +367,8 @@ with tab_players:
                     "Rank": rank_val if rank_val is not None else 999999,
                     "ProjPPR": p_proj,
                     "AvgPPR": p_avg,
-                    "Headshot": headshot_url
+                    "Headshot": headshot_url,
+                    "Status": status_str
                 })
 
         team_players = sorted(team_players, key=lambda x: x["Rank"])
@@ -380,11 +387,19 @@ with tab_players:
                                 col_img, col_info = st.columns([1, 1.4])
                                 with col_img:
                                     st.image(p["Headshot"], width=115)
+                                    
+                                    # Color-coded injury status badge beneath image
+                                    if p["Status"] == "Healthy":
+                                        st.caption(f"🟢 **{p['Status']}**")
+                                    elif p["Status"] in ["Questionable", "Doubtful"]:
+                                        st.caption(f"🟡 **{p['Status']}**")
+                                    else:
+                                        st.caption(f"🔴 **{p['Status']}**")
+
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     
-                                    # Dual metrics for Proj vs Avg PPR
                                     m1, m2 = st.columns(2)
                                     with m1:
                                         st.metric(
