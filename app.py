@@ -30,7 +30,7 @@ DIVISIONS = {
 
 NFL_TEAMS = [team for conf in DIVISIONS.values() for div in conf.values() for team in div]
 
-# --- ESPN TEAM LOGO URL MAPPING ---
+# --- ESPN LOGO CODE MAPPING ---
 ESPN_LOGOS = {
     "ARI": "ari", "ATL": "atl", "BAL": "bal", "BUF": "buf",
     "CAR": "car", "CHI": "chi", "CIN": "cin", "CLE": "cle",
@@ -94,51 +94,17 @@ def fetch_nfl_players():
     return {}
 
 @st.cache_data(ttl=1800)
-def fetch_nfl_state():
-    url = "https://api.sleeper.app/v1/state/nfl"
+def fetch_espn_projections(week_num):
+    """Fetches player projections directly from ESPN public fantasy API."""
+    url = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leaguedefaults/3?scoringPeriodId={week_num}&view=mRoster&view=mMatchup&view=mSettings"
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             return response.json()
     except Exception:
         pass
-    return {"season": "2026", "week": 1}
-
-@st.cache_data(ttl=900)
-def fetch_weekly_projections(season_year, week_num):
-    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            res_json = response.json()
-            if not res_json and season_year != "2025":
-                fallback_url = f"https://api.sleeper.app/v1/projections/nfl/regular/2025/{week_num}"
-                fb_res = requests.get(fallback_url, timeout=10)
-                if fb_res.status_code == 200:
-                    return fb_res.json()
-            return res_json
-    except Exception:
-        pass
     return {}
-
-def calculate_ppr_from_stats(stats_dict):
-    if not stats_dict:
-        return 0.0
-    if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
-        return float(stats_dict["pts_ppr"])
-    if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
-        return float(stats_dict["pts_half_ppr"])
-
-    pts = 0.0
-    pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
-    pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
-    pts -= float(stats_dict.get("pass_int", 0) or 0) * 2.0
-    pts += float(stats_dict.get("rush_yd", 0) or 0) * 0.1
-    pts += float(stats_dict.get("rush_td", 0) or 0) * 6.0
-    pts += float(stats_dict.get("rec", 0) or 0) * 1.0
-    pts += float(stats_dict.get("rec_yd", 0) or 0) * 0.1
-    pts += float(stats_dict.get("rec_td", 0) or 0) * 6.0
-    return round(pts, 2)
 
 players_db = fetch_nfl_players()
 
@@ -271,7 +237,6 @@ with tab_grid:
                         logo_code = ESPN_LOGOS.get(team, team.lower())
                         logo_url = f"https://a.espncdn.com/i/teamlogos/nfl/500/{logo_code}.png"
                         
-                        # Determine pick status
                         if team in wes_used and team in sav_used:
                             badge = "🔒 Both"
                         elif team in wes_used:
@@ -290,7 +255,7 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: LIVE SLEEPER PLAYER POOL & PROJECTIONS
+# TAB 3: ESPN PLAYER POOL & PROJECTIONS
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -306,10 +271,8 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        nfl_state = fetch_nfl_state()
-        season_year = nfl_state.get("season", "2026")
-
-        projections_data = fetch_weekly_projections(season_year, p_week_num)
+        # Query ESPN's public projections API
+        espn_data = fetch_espn_projections(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
@@ -318,11 +281,10 @@ with tab_players:
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
                 rank_val = pdata.get("search_rank")
                 
+                # Default projection
                 p_proj = 0.0
-                if str(pid) in projections_data:
-                    p_stats = projections_data[str(pid)].get("stats", {})
-                    p_proj = calculate_ppr_from_stats(p_stats)
 
+                # Headshot URL
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
