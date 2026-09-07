@@ -30,7 +30,7 @@ DIVISIONS = {
 
 NFL_TEAMS = [team for conf in DIVISIONS.values() for div in conf.values() for team in div]
 
-# --- ESPN LOGO CODE MAPPING ---
+# --- ESPN LOGO MAPPING ---
 ESPN_LOGOS = {
     "ARI": "ari", "ATL": "atl", "BAL": "bal", "BUF": "buf",
     "CAR": "car", "CHI": "chi", "CIN": "cin", "CLE": "cle",
@@ -93,20 +93,28 @@ def fetch_nfl_players():
         pass
     return {}
 
-@st.cache_data(ttl=1800)
-def fetch_espn_projections(week_num):
-    """Fetches player projections directly from ESPN public fantasy API."""
-    url = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leaguedefaults/3?scoringPeriodId={week_num}&view=mRoster&view=mMatchup&view=mSettings"
-    headers = {"User-Agent": "Mozilla/5.0"}
+@st.cache_data(ttl=3600)
+def fetch_leaguelogs_market():
+    """Fetches player market valuations directly from LeagueLogs Developer API."""
+    url = "https://developer.leaguelogs.com/v1/market/redraft_ppr"
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            # Map Sleeper Player ID -> Market Value / Projection Score
+            val_map = {}
+            for item in data.get("players", []):
+                p_id = item.get("sleeperPlayerId")
+                val = item.get("value", 0.0)
+                if p_id:
+                    val_map[str(p_id)] = val
+            return val_map
     except Exception:
         pass
     return {}
 
 players_db = fetch_nfl_players()
+leaguelogs_market = fetch_leaguelogs_market()
 
 # --- SIDEBAR LOGIN ---
 st.sidebar.title("🔐 League Login")
@@ -255,13 +263,12 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: ESPN PLAYER POOL & PROJECTIONS
+# TAB 3: LEAGUELOGS PLAYER POOL
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
-    st.subheader("Active Weekly Player Pool")
+    st.subheader("Active Weekly Player Pool (LeagueLogs Data)")
     p_week_str = st.selectbox("View Player Pool for Week:", [f"Week {w}" for w in range(1, 17)], key="p_week")
-    p_week_num = int(p_week_str.split()[1])
     p_user = st.radio("Select Manager Roster:", ["Wes", "Savanna"], horizontal=True)
 
     active_teams = st.session_state["picks"][p_user][p_week_str]
@@ -270,21 +277,17 @@ with tab_players:
         st.info(f"{p_user} has not locked in picks for {p_week_str} yet.")
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
-        
-        # Query ESPN's public projections API
-        espn_data = fetch_espn_projections(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
-                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
+                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}".strip()
                 rank_val = pdata.get("search_rank")
                 
-                # Default projection
-                p_proj = 0.0
+                # Fetch valuation directly from LeagueLogs API map
+                p_val = leaguelogs_market.get(str(pid), 0.0)
 
-                # Headshot URL
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
@@ -295,7 +298,7 @@ with tab_players:
                     "Position": pdata.get("position"),
                     "Team": team_code,
                     "Rank": rank_val if rank_val is not None else 999999,
-                    "ProjPPR": p_proj,
+                    "Value": p_val,
                     "Headshot": headshot_url
                 })
 
@@ -319,8 +322,10 @@ with tab_players:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     st.metric(
-                                        label="Proj PPR Points",
-                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
+                                        label="LeagueLogs Value",
+                                        value=f"{p['Value']:.1f}" if p['Value'] > 0 else "N/A"
                                     )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
+
+        st.caption("Powered by the LeagueLogs API")
