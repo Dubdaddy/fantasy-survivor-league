@@ -73,6 +73,7 @@ def fetch_nfl_players():
 
 @st.cache_data(ttl=1800)
 def fetch_weekly_projections(season_year, week_num):
+    """Fetches exact weekly projections from Sleeper."""
     url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
     try:
         response = requests.get(url, timeout=10)
@@ -83,34 +84,16 @@ def fetch_weekly_projections(season_year, week_num):
     return {}
 
 @st.cache_data(ttl=3600)
-def fetch_season_stats(season_year):
-    url = f"https://api.sleeper.app/v1/stats/nfl/regular/{season_year}"
+def fetch_weekly_schedule(season_year):
+    """Fetches full NFL schedule from Sleeper for matchups."""
+    url = f"https://api.sleeper.app/v1/schedule/nfl/regular/{season_year}"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             return response.json()
     except Exception:
         pass
-    return {}
-
-def calculate_ppr_points(stats_dict):
-    """Calculates PPR points manually if precomputed pts_ppr is absent."""
-    if not stats_dict:
-        return 0.0
-    if "pts_ppr" in stats_dict:
-        return float(stats_dict["pts_ppr"])
-    
-    # Manual PPR calculation
-    pts = 0.0
-    pts += float(stats_dict.get("pass_yd", 0)) * 0.04
-    pts += float(stats_dict.get("pass_td", 0)) * 4.0
-    pts -= float(stats_dict.get("pass_int", 0)) * 2.0
-    pts += float(stats_dict.get("rush_yd", 0)) * 0.1
-    pts += float(stats_dict.get("rush_td", 0)) * 6.0
-    pts += float(stats_dict.get("rec", 0)) * 1.0
-    pts += float(stats_dict.get("rec_yd", 0)) * 0.1
-    pts += float(stats_dict.get("rec_td", 0)) * 6.0
-    return round(pts, 1)
+    return []
 
 players_db = fetch_nfl_players()
 
@@ -153,7 +136,6 @@ with tab_draft:
         week_num = int(selected_week.split()[1])
         season = 1 if week_num <= 8 else 2
 
-        # Alternating First Pick
         first_picker = "Savanna" if week_num % 2 != 0 else "Wes"
         st.caption(f"📢 First Pick Priority for {selected_week}: **{first_picker}**")
 
@@ -240,7 +222,7 @@ with tab_grid:
             st.metric(label=team, value=status)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL WITH PROJECTIONS & APPG
+# TAB 3: PLAYER POOL WITH PROJECTIONS & OPPONENTS
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -256,41 +238,52 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch weekly projections & season stats
+        # Fetch weekly projections & schedule data for 2026
         projections_data = fetch_weekly_projections(2026, p_week_num)
-        season_stats_data = fetch_season_stats(2025) # Default/Prior baseline stats
+        schedule_data = fetch_weekly_schedule(2026)
+
+        # Build Opponent Mapping Dictionary for the week
+        opp_map = {}
+        for game in schedule_data:
+            if game.get("week") == p_week_num:
+                home = game.get("home_team")
+                away = game.get("away_team")
+                if home and away:
+                    opp_map[home] = f"vs {away}"
+                    opp_map[away] = f"@{home}"
 
         team_players = []
         for pid, pdata in players_db.items():
-            if pdata.get("team") in active_teams and pdata.get("active"):
+            team_code = pdata.get("team")
+            if team_code in active_teams and pdata.get("active"):
                 rank_val = pdata.get("search_rank")
                 
-                # Projections Calculation
-                proj_dict = projections_data.get(pid, {}).get("stats", {})
-                proj_ppr = calculate_ppr_points(proj_dict)
+                # Retrieve exact projected PPR score from Sleeper
+                p_proj = 0.0
+                if pid in projections_data:
+                    p_stats = projections_data[pid].get("stats", {})
+                    p_proj = p_stats.get("pts_ppr", p_stats.get("pts_half_ppr", 0.0))
 
-                # Average Points Per Game (APPG) Calculation
-                season_dict = season_stats_data.get(pid, {}).get("stats", {})
-                total_season_pts = calculate_ppr_points(season_dict)
-                games_played = float(season_dict.get("gp", 1.0))
-                appg = round(total_season_pts / games_played, 1) if games_played > 0 else 0.0
+                # Opponent lookup
+                matchup_str = opp_map.get(team_code, "BYE")
 
-                # Headshot Image URL
+                # Headshot URL
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
-                    headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{pdata.get('team').lower()}.png"
+                    headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
 
                 team_players.append({
                     "ID": pid,
                     "Name": f"{pdata.get('first_name')} {pdata.get('last_name')}",
                     "Position": pdata.get("position"),
-                    "Team": pdata.get("team"),
+                    "Team": team_code,
+                    "Opponent": matchup_str,
                     "Rank": rank_val if rank_val is not None else 999999,
-                    "ProjPPR": proj_ppr,
-                    "APPG": appg,
+                    "ProjPPR": p_proj,
                     "Headshot": headshot_url
                 })
 
+        # Sort by rank/relevance
         team_players = sorted(team_players, key=lambda x: x["Rank"])
 
         pos_tabs = st.tabs(["QB", "RB", "WR", "TE", "K", "DEF"])
@@ -309,18 +302,10 @@ with tab_players:
                                     st.image(p["Headshot"], width=75)
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
-                                    st.caption(f"{p['Team']} | {p['Position']}")
-                                    
-                                    m_col1, m_col2 = st.columns(2)
-                                    with m_col1:
-                                        st.metric(
-                                            label="Proj PPR",
-                                            value=f"{p['ProjPPR']:.1f}" if p['ProjPPR'] > 0 else "--"
-                                        )
-                                    with m_col2:
-                                        st.metric(
-                                            label="APPG",
-                                            value=f"{p['APPG']:.1f}" if p['APPG'] > 0 else "--"
-                                        )
+                                    st.caption(f"{p['Team']} ({p['Opponent']}) | {p['Position']}")
+                                    st.metric(
+                                        label="Proj PPR Points",
+                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
+                                    )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
