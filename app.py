@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+import os
 import random
 import time
 import requests
@@ -25,15 +26,31 @@ USERS = {
     "Savanna": "sav123"
 }
 
+# --- PERSISTENT FILE STORAGE ---
+DATA_FILE = "picks.json"
+
+def load_picks():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "Wes": {f"Week {w}": [] for w in range(1, 17)},
+        "Savanna": {f"Week {w}": [] for w in range(1, 17)}
+    }
+
+def save_picks(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
 # --- INITIALIZE SESSION STATE ---
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
 if "picks" not in st.session_state:
-    st.session_state["picks"] = {
-        "Wes": {f"Week {w}": [] for w in range(1, 17)},
-        "Savanna": {f"Week {w}": [] for w in range(1, 17)}
-    }
+    st.session_state["picks"] = load_picks()
 
 # --- HELPER FUNCTIONS ---
 def get_used_teams(player, season=1):
@@ -46,6 +63,17 @@ def get_used_teams(player, season=1):
 @st.cache_data(ttl=3600)
 def fetch_nfl_players():
     url = "https://api.sleeper.app/v1/players/nfl"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return {}
+
+@st.cache_data(ttl=1800)
+def fetch_weekly_projections(season_year, week_num):
+    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -85,6 +113,8 @@ tab_draft, tab_grid, tab_players = st.tabs(["🎯 Tuesday Draft Center", "📊 T
 # TAB 1: DRAFT CENTER
 # ---------------------------------------------------------
 with tab_draft:
+    st.session_state["picks"] = load_picks()
+    
     current_user = st.session_state.get("user")
     if not current_user:
         st.info("👈 Please log in on the sidebar to make your weekly selections.")
@@ -101,13 +131,9 @@ with tab_draft:
         opponent = "Savanna" if current_user == "Wes" else "Wes"
         opp_picks_this_week = st.session_state["picks"][opponent][selected_week]
 
-        # Current saved picks for this week
         my_current_picks = st.session_state["picks"][current_user][selected_week]
-
-        # Used in other weeks of this season (excluding current week's picks)
         used_other_weeks = [t for t in used_by_me if t not in my_current_picks]
 
-        # Available options must include available fresh teams + currently selected teams
         available_teams = sorted(list(set([t for t in NFL_TEAMS if t not in used_other_weeks and t not in opp_picks_this_week] + my_current_picks)))
 
         st.subheader(f"{current_user}'s Draft Room ({selected_week})")
@@ -125,7 +151,8 @@ with tab_draft:
             if st.button("🔒 Save Weekly Picks"):
                 if len(my_selection) == 4:
                     st.session_state["picks"][current_user][selected_week] = my_selection
-                    st.success(f"Picks locked in for {selected_week}: {', '.join(my_selection)}")
+                    save_picks(st.session_state["picks"])
+                    st.success(f"Picks locked in and saved for {selected_week}: {', '.join(my_selection)}")
                     st.rerun()
                 else:
                     st.warning("Please select exactly 4 teams.")
@@ -152,6 +179,7 @@ with tab_draft:
                         spun_team = random.choice(wheel_pool)
                         my_selection.append(spun_team)
                         st.session_state["picks"][current_user][selected_week] = my_selection
+                        save_picks(st.session_state["picks"])
                         st.balloons()
                         st.success(f"🎉 The wheel landed on: **{spun_team}**!")
                         st.rerun()
@@ -160,6 +188,7 @@ with tab_draft:
 # TAB 2: VISUAL TEAM TRACKING GRID
 # ---------------------------------------------------------
 with tab_grid:
+    st.session_state["picks"] = load_picks()
     st.subheader("Visual Team Availability Grid")
     view_season = st.radio("Select Season View:", ["Season 1 (Weeks 1–8)", "Season 2 (Weeks 9–16)"], horizontal=True)
     s_num = 1 if "Season 1" in view_season else 2
@@ -181,28 +210,48 @@ with tab_grid:
             st.metric(label=team, value=status)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL & PROJECTIONS
+# TAB 3: PLAYER POOL & PROJECTIONS WITH HEADSHOTS
 # ---------------------------------------------------------
 with tab_players:
+    st.session_state["picks"] = load_picks()
     st.subheader("Active Weekly Player Pool")
-    p_week = st.selectbox("View Player Pool for Week:", [f"Week {w}" for w in range(1, 17)], key="p_week")
+    p_week_str = st.selectbox("View Player Pool for Week:", [f"Week {w}" for w in range(1, 17)], key="p_week")
+    p_week_num = int(p_week_str.split()[1])
     p_user = st.radio("Select Manager Roster:", ["Wes", "Savanna"], horizontal=True)
 
-    active_teams = st.session_state["picks"][p_user][p_week]
+    active_teams = st.session_state["picks"][p_user][p_week_str]
 
     if not active_teams:
-        st.info(f"{p_user} has not locked in picks for {p_week} yet.")
+        st.info(f"{p_user} has not locked in picks for {p_week_str} yet.")
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
+        # Fetch weekly projections
+        projections_data = fetch_weekly_projections(2026, p_week_num)
+
         team_players = []
         for pid, pdata in players_db.items():
             if pdata.get("team") in active_teams and pdata.get("active"):
+                rank_val = pdata.get("search_rank")
+                
+                # Retrieve projected PPR score from Sleeper
+                p_proj = 0.0
+                if pid in projections_data and "stats" in projections_data[pid]:
+                    p_proj = projections_data[pid]["stats"].get("pts_ppr", 0.0)
+
+                # Sleeper Headshot URL
+                headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
+                if pdata.get("position") == "DEF":
+                    headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{pdata.get('team').lower()}.png"
+
                 team_players.append({
+                    "ID": pid,
                     "Name": f"{pdata.get('first_name')} {pdata.get('last_name')}",
                     "Position": pdata.get("position"),
                     "Team": pdata.get("team"),
-                    "Rank": pdata.get("search_rank", 9999)
+                    "Rank": rank_val if rank_val is not None else 999999,
+                    "ProjectedPPR": p_proj,
+                    "Headshot": headshot_url
                 })
 
         team_players = sorted(team_players, key=lambda x: x["Rank"])
@@ -217,9 +266,16 @@ with tab_players:
                     p_cols = st.columns(3)
                     for i, p in enumerate(filtered):
                         with p_cols[i % 3]:
-                            st.metric(
-                                label=f"{p['Name']} ({p['Team']})",
-                                value=p["Position"]
-                            )
+                            with st.container(border=True):
+                                col_img, col_info = st.columns([1, 2])
+                                with col_img:
+                                    st.image(p["Headshot"], width=75)
+                                with col_info:
+                                    st.markdown(f"**{p['Name']}**")
+                                    st.caption(f"{p['Team']} | {p['Position']}")
+                                    st.metric(
+                                        label="Proj. PPR",
+                                        value=f"{p['ProjectedPPR']:.1f} pts" if p['ProjectedPPR'] > 0 else "N/A"
+                                    )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
