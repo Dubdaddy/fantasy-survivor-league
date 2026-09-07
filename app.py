@@ -71,9 +71,9 @@ def fetch_nfl_players():
         pass
     return {}
 
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=900)
 def fetch_weekly_projections(season_year, week_num):
-    """Fetches exact weekly projections from Sleeper."""
+    """Fetches live weekly projections directly from Sleeper API."""
     url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
     try:
         response = requests.get(url, timeout=10)
@@ -83,54 +83,38 @@ def fetch_weekly_projections(season_year, week_num):
         pass
     return {}
 
-# Baseline Matchups mapping for Week 1
-WEEK_1_MATCHUPS = {
-    "CHI": "@CAR", "CAR": "vs CHI",
-    "MIN": "@GB",  "GB": "vs MIN",
-    "PHI": "@DAL", "DAL": "vs PHI",
-    "NYJ": "@MIA", "MIA": "vs NYJ",
-    "BAL": "@KC",  "KC": "vs BAL",
-    "LV":  "@DEN", "DEN": "vs LV",
-    "IND": "@HOU", "HOU": "vs IND",
-    "LAC": "@LV",  "LAR": "vs ARI",
-    "ARI": "@LAR", "BUF": "vs ARI",
-    "CLE": "@CIN", "CIN": "vs CLE",
-    "DET": "@TB",  "TB": "vs DET",
-    "PIT": "@ATL", "ATL": "vs PIT",
-    "WAS": "@NYG", "NYG": "vs WAS",
-    "SF":  "@SEA", "SEA": "vs SF",
-    "TEN": "@NO",  "NO": "vs TEN",
-    "JAX": "@GB"
-}
+@st.cache_data(ttl=3600)
+def fetch_weekly_schedule(season_year, week_num):
+    """Fetches live schedule from Sleeper for exact team matchups."""
+    url = f"https://api.sleeper.app/v1/schedule/nfl/regular/{season_year}/{week_num}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return []
 
-# Baseline PPR Projections Fallback (for key starters if Sleeper API projections dictionary key is missing)
-STARTER_PROJECTIONS_FALLBACK = {
-    "Caleb Williams": 18.94,
-    "Justin Herbert": 18.10,
-    "Dak Prescott": 18.25,
-    "Anthony Richardson": 17.80,
-    "Daniel Jones": 14.50,
-    "Patrick Mahomes": 19.50,
-    "Lamar Jackson": 21.20,
-    "Geno Smith": 15.10,
-    "Kirk Cousins": 15.80,
-    "CeeDee Lamb": 18.50,
-    "Jonathan Taylor": 16.20,
-    "D'Andre Swift": 13.40,
-    "Josh Downs": 11.20,
-    "Ladd McConkey": 12.80,
-    "Rome Odunze": 12.10,
-    "Keenan Allen": 11.90,
-    "Cole Kmet": 9.40,
-    "Travis Kelce": 13.80,
-    "Mark Andrews": 12.20,
-    "Isiah Pacheco": 14.10,
-    "Derrick Henry": 15.60,
-    "Zay Flowers": 13.10,
-    "Davante Adams": 14.80,
-    "Garrett Wilson": 15.20,
-    "Breece Hall": 16.80
-}
+def get_sleeper_ppr_projection(p_stats):
+    """Calculates PPR projection directly from Sleeper's stat projections."""
+    if not p_stats:
+        return 0.0
+    
+    # 1. Use Sleeper's precalculated pts_ppr if present
+    if "pts_ppr" in p_stats and p_stats["pts_ppr"] is not None:
+        return float(p_stats["pts_ppr"])
+    
+    # 2. Calculate directly from Sleeper's projected stat fields
+    pts = 0.0
+    pts += float(p_stats.get("pass_yd", 0) or 0) * 0.04
+    pts += float(p_stats.get("pass_td", 0) or 0) * 4.0
+    pts -= float(p_stats.get("pass_int", 0) or 0) * 2.0
+    pts += float(p_stats.get("rush_yd", 0) or 0) * 0.1
+    pts += float(p_stats.get("rush_td", 0) or 0) * 6.0
+    pts += float(p_stats.get("rec", 0) or 0) * 1.0
+    pts += float(p_stats.get("rec_yd", 0) or 0) * 0.1
+    pts += float(p_stats.get("rec_td", 0) or 0) * 6.0
+    return round(pts, 2)
 
 players_db = fetch_nfl_players()
 
@@ -259,7 +243,7 @@ with tab_grid:
             st.metric(label=team, value=status)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL WITH PROJECTIONS & OPPONENTS
+# TAB 3: LIVE SLEEPER PLAYER POOL & PROJECTIONS
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -275,8 +259,19 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch weekly projections
+        # Fetch live weekly projections and schedule directly from Sleeper API
         projections_data = fetch_weekly_projections(2026, p_week_num)
+        schedule_data = fetch_weekly_schedule(2026, p_week_num)
+
+        # Build live opponent mapping for the week
+        opp_map = {}
+        if isinstance(schedule_data, list):
+            for game in schedule_data:
+                home = game.get("home_team")
+                away = game.get("away_team")
+                if home and away:
+                    opp_map[home] = f"vs {away}"
+                    opp_map[away] = f"@{home}"
 
         team_players = []
         for pid, pdata in players_db.items():
@@ -285,20 +280,16 @@ with tab_players:
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
                 rank_val = pdata.get("search_rank")
                 
-                # Retrieve exact projected PPR score from Sleeper or fallback map
+                # Retrieve exact projected PPR score directly from Sleeper
                 p_proj = 0.0
                 if str(pid) in projections_data:
                     p_stats = projections_data[str(pid)].get("stats", {})
-                    p_proj = float(p_stats.get("pts_ppr", p_stats.get("pts_half_ppr", 0.0)))
-                
-                # If API projections return 0.0, check fallback starter dictionary
-                if p_proj == 0.0:
-                    p_proj = STARTER_PROJECTIONS_FALLBACK.get(full_name, 0.0)
+                    p_proj = get_sleeper_ppr_projection(p_stats)
 
-                # Matchup String
-                matchup_str = WEEK_1_MATCHUPS.get(team_code, "vs OPP")
+                # Opponent lookup
+                matchup_str = opp_map.get(team_code, f"Week {p_week_num}")
 
-                # Headshot URL
+                # Headshot URL from Sleeper CDN
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
@@ -336,7 +327,7 @@ with tab_players:
                                     st.caption(f"{p['Team']} ({p['Opponent']}) | {p['Position']}")
                                     st.metric(
                                         label="Proj PPR Points",
-                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "--"
+                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
                                     )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
