@@ -30,7 +30,7 @@ DIVISIONS = {
 
 NFL_TEAMS = [team for conf in DIVISIONS.values() for div in conf.values() for team in div]
 
-# --- ESPN LOGO MAPPING ---
+# --- ESPN TEAM LOGO URL MAPPING ---
 ESPN_LOGOS = {
     "ARI": "ari", "ATL": "atl", "BAL": "bal", "BUF": "buf",
     "CAR": "car", "CHI": "chi", "CIN": "cin", "CLE": "cle",
@@ -40,30 +40,6 @@ ESPN_LOGOS = {
     "MIN": "min", "NE": "ne",   "NO": "no",   "NYG": "nyg",
     "NYJ": "nyj", "PHI": "phi", "PIT": "pit", "SEA": "sea",
     "SF": "sf",   "TB": "tb",   "TEN": "ten", "WAS": "was"
-}
-
-# Baseline consensus weekly projections (Enforces 18.94 for Caleb Williams when Sleeper raw stats are off)
-OFFICIAL_WEEKLY_PROJECTIONS = {
-    "Caleb Williams": 18.94,
-    "Justin Herbert": 18.10,
-    "Dak Prescott": 18.25,
-    "Anthony Richardson": 17.80,
-    "Daniel Jones": 14.50,
-    "Patrick Mahomes": 19.80,
-    "Lamar Jackson": 21.20,
-    "Jonathan Taylor": 18.70,
-    "D'Andre Swift": 13.40,
-    "Javonte Williams": 12.10,
-    "Omarion Hampton": 11.20,
-    "CeeDee Lamb": 18.50,
-    "Amon-Ra St. Brown": 16.30,
-    "Josh Downs": 11.20,
-    "Ladd McConkey": 12.80,
-    "Rome Odunze": 12.10,
-    "Keenan Allen": 11.90,
-    "Cole Kmet": 9.40,
-    "Travis Kelce": 13.80,
-    "Mark Andrews": 12.20
 }
 
 # --- LOGIN CREDENTIALS ---
@@ -128,47 +104,41 @@ def fetch_nfl_state():
         pass
     return {"season": "2026", "week": 1}
 
-@st.cache_data(ttl=300)
-def fetch_sleeper_weekly_projections(season_year, week_num):
+@st.cache_data(ttl=900)
+def fetch_weekly_projections(season_year, week_num):
     url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            return response.json()
+            res_json = response.json()
+            if not res_json and season_year != "2025":
+                fallback_url = f"https://api.sleeper.app/v1/projections/nfl/regular/2025/{week_num}"
+                fb_res = requests.get(fallback_url, timeout=10)
+                if fb_res.status_code == 200:
+                    return fb_res.json()
+            return res_json
     except Exception:
         pass
     return {}
 
-def calculate_accurate_ppr(pid, full_name, projections_data):
-    """Calculates clean PPR projection without API math skew."""
-    # Priority 1: Official projection map
-    if full_name in OFFICIAL_WEEKLY_PROJECTIONS:
-        return OFFICIAL_WEEKLY_PROJECTIONS[full_name]
+def calculate_ppr_from_stats(stats_dict):
+    if not stats_dict:
+        return 0.0
+    if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
+        return float(stats_dict["pts_ppr"])
+    if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
+        return float(stats_dict["pts_half_ppr"])
 
-    # Priority 2: Extract from Sleeper API
-    pid_str = str(pid)
-    if pid_str in projections_data:
-        stats = projections_data[pid_str].get("stats", {})
-        if "pts_ppr" in stats and stats["pts_ppr"] is not None:
-            return float(stats["pts_ppr"])
-        
-        pass_yd = float(stats.get("pass_yd", 0) or 0)
-        pass_td = float(stats.get("pass_td", 0) or 0)
-        pass_int = float(stats.get("pass_int", 0) or 0)
-        rush_yd = float(stats.get("rush_yd", 0) or 0)
-        rush_td = float(stats.get("rush_td", 0) or 0)
-        rec = float(stats.get("rec", 0) or 0)
-        rec_yd = float(stats.get("rec_yd", 0) or 0)
-        rec_td = float(stats.get("rec_td", 0) or 0)
-
-        calc_ppr = (pass_yd * 0.04) + (pass_td * 4.0) - (pass_int * 2.0) + \
-                   (rush_yd * 0.1) + (rush_td * 6.0) + \
-                   (rec * 1.0) + (rec_yd * 0.1) + (rec_td * 6.0)
-
-        if calc_ppr > 0:
-            return round(calc_ppr, 2)
-
-    return 0.00
+    pts = 0.0
+    pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
+    pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
+    pts -= float(stats_dict.get("pass_int", 0) or 0) * 2.0
+    pts += float(stats_dict.get("rush_yd", 0) or 0) * 0.1
+    pts += float(stats_dict.get("rush_td", 0) or 0) * 6.0
+    pts += float(stats_dict.get("rec", 0) or 0) * 1.0
+    pts += float(stats_dict.get("rec_yd", 0) or 0) * 0.1
+    pts += float(stats_dict.get("rec_td", 0) or 0) * 6.0
+    return round(pts, 2)
 
 players_db = fetch_nfl_players()
 
@@ -225,6 +195,7 @@ with tab_draft:
 
         st.subheader(f"{current_user}'s Draft Room ({selected_week})")
 
+        # Standard Selection
         if len(available_teams) >= 4:
             valid_defaults = [t for t in my_current_picks if t in available_teams]
             
@@ -243,6 +214,7 @@ with tab_draft:
                 else:
                     st.warning("Please select exactly 4 teams.")
 
+        # Week 8 / 16 Wheel Spin Trigger
         else:
             st.warning(f"Only {len(available_teams)} fresh team(s) remaining for selection in Season {season}!")
             valid_defaults = [t for t in my_current_picks if t in available_teams]
@@ -299,6 +271,7 @@ with tab_grid:
                         logo_code = ESPN_LOGOS.get(team, team.lower())
                         logo_url = f"https://a.espncdn.com/i/teamlogos/nfl/500/{logo_code}.png"
                         
+                        # Determine pick status
                         if team in wes_used and team in sav_used:
                             badge = "🔒 Both"
                         elif team in wes_used:
@@ -317,7 +290,7 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL
+# TAB 3: LIVE SLEEPER PLAYER POOL & PROJECTIONS
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -332,20 +305,23 @@ with tab_players:
         st.info(f"{p_user} has not locked in picks for {p_week_str} yet.")
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
-
+        
         nfl_state = fetch_nfl_state()
         season_year = nfl_state.get("season", "2026")
-        projections_data = fetch_sleeper_weekly_projections(season_year, p_week_num)
+
+        projections_data = fetch_weekly_projections(season_year, p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
-                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}".strip()
+                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
                 rank_val = pdata.get("search_rank")
                 
-                # Fetch clean projection score
-                p_proj = calculate_accurate_ppr(pid, full_name, projections_data)
+                p_proj = 0.0
+                if str(pid) in projections_data:
+                    p_stats = projections_data[str(pid)].get("stats", {})
+                    p_proj = calculate_ppr_from_stats(p_stats)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -382,7 +358,7 @@ with tab_players:
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     st.metric(
                                         label="Proj PPR Points",
-                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "--"
+                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
                                     )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
