@@ -341,9 +341,13 @@ with tab_players:
                 rank_val = pdata.get("search_rank")
                 
                 p_proj = 0.0
+                p_avg = 0.0
                 if str(pid) in projections_data:
                     p_stats = projections_data[str(pid)].get("stats", {})
                     p_proj = calculate_ppr_from_stats(p_stats)
+                    # Pull historical stats average if present in Sleeper payload
+                    if "pts_ppr_avg" in p_stats and p_stats["pts_ppr_avg"] is not None:
+                        p_avg = float(p_stats["pts_ppr_avg"])
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -356,6 +360,7 @@ with tab_players:
                     "Team": team_code,
                     "Rank": rank_val if rank_val is not None else 999999,
                     "ProjPPR": p_proj,
+                    "AvgPPR": p_avg,
                     "Headshot": headshot_url
                 })
 
@@ -378,9 +383,18 @@ with tab_players:
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
-                                    st.metric(
-                                        label="Proj PPR Points",
-                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
-                                    )
+                                    
+                                    # Dual metrics for Proj vs Avg PPR
+                                    m1, m2 = st.columns(2)
+                                    with m1:
+                                        st.metric(
+                                            label="Proj PPR",
+                                            value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
+                                        )
+                                    with m2:
+                                        st.metric(
+                                            label="Avg PPR",
+                                            value=f"{p['AvgPPR']:.2f}" if p['AvgPPR'] > 0 else "0.00"
+                                        )
                 else:
-                    st.write(f"No active {pos} assets found for selected teams.")
+                    st.write(f"No active {pos} found for selected teams.")
