@@ -12,13 +12,35 @@ st.set_page_config(
     page_icon="🏈"
 )
 
-# --- NFL TEAMS DATA ---
-NFL_TEAMS = [
-    "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE",
-    "DAL", "DEN", "DET", "GB", "HOU", "IND", "JAX", "KC",
-    "LV", "LAC", "LAR", "MIA", "MIN", "NE", "NO", "NYG",
-    "NYJ", "PHI", "PIT", "SEA", "SF", "TB", "TEN", "WAS"
-]
+# --- NFL DIVISIONS DATA ---
+DIVISIONS = {
+    "AFC": {
+        "East": ["BUF", "MIA", "NE", "NYJ"],
+        "North": ["BAL", "CIN", "CLE", "PIT"],
+        "South": ["HOU", "IND", "JAX", "TEN"],
+        "West": ["DEN", "KC", "LV", "LAC"]
+    },
+    "NFC": {
+        "East": ["DAL", "NYG", "PHI", "WAS"],
+        "North": ["CHI", "DET", "GB", "MIN"],
+        "South": ["ATL", "CAR", "NO", "TB"],
+        "West": ["ARI", "LAR", "SF", "SEA"]
+    }
+}
+
+NFL_TEAMS = [team for conf in DIVISIONS.values() for div in conf.values() for team in div]
+
+# --- ESPN TEAM LOGO URL MAPPING ---
+ESPN_LOGOS = {
+    "ARI": "ari", "ATL": "atl", "BAL": "bal", "BUF": "buf",
+    "CAR": "car", "CHI": "chi", "CIN": "cin", "CLE": "cle",
+    "DAL": "dal", "DEN": "den", "DET": "det", "GB": "gb",
+    "HOU": "hou", "IND": "ind", "JAX": "jax", "KC": "kc",
+    "LV": "lv",   "LAC": "lac", "LAR": "lar", "MIA": "mia",
+    "MIN": "min", "NE": "ne",   "NO": "no",   "NYG": "nyg",
+    "NYJ": "nyj", "PHI": "phi", "PIT": "pit", "SEA": "sea",
+    "SF": "sf",   "TB": "tb",   "TEN": "ten", "WAS": "was"
+}
 
 # --- LOGIN CREDENTIALS ---
 USERS = {
@@ -73,7 +95,6 @@ def fetch_nfl_players():
 
 @st.cache_data(ttl=1800)
 def fetch_nfl_state():
-    """Fetches current NFL season state from Sleeper (season year, week, etc.)."""
     url = "https://api.sleeper.app/v1/state/nfl"
     try:
         response = requests.get(url, timeout=10)
@@ -85,13 +106,11 @@ def fetch_nfl_state():
 
 @st.cache_data(ttl=900)
 def fetch_weekly_projections(season_year, week_num):
-    """Fetches live weekly projections directly from Sleeper API."""
     url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             res_json = response.json()
-            # If current season endpoint returns empty, try fallback to active season state
             if not res_json and season_year != "2025":
                 fallback_url = f"https://api.sleeper.app/v1/projections/nfl/regular/2025/{week_num}"
                 fb_res = requests.get(fallback_url, timeout=10)
@@ -103,17 +122,13 @@ def fetch_weekly_projections(season_year, week_num):
     return {}
 
 def calculate_ppr_from_stats(stats_dict):
-    """Calculates exact PPR score directly from Sleeper's stat projection dictionary."""
     if not stats_dict:
         return 0.0
-    
-    # 1. Direct pts_ppr check
     if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
         return float(stats_dict["pts_ppr"])
     if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
         return float(stats_dict["pts_half_ppr"])
 
-    # 2. Formula-based calculation from raw stat fields
     pts = 0.0
     pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
     pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
@@ -227,29 +242,52 @@ with tab_draft:
                         st.rerun()
 
 # ---------------------------------------------------------
-# TAB 2: VISUAL TEAM TRACKING GRID
+# TAB 2: AFC/NFC DIVISIONAL TEAM TRACKING GRID
 # ---------------------------------------------------------
 with tab_grid:
     st.session_state["picks"] = load_picks()
     st.subheader("Visual Team Availability Grid")
+    
     view_season = st.radio("Select Season View:", ["Season 1 (Weeks 1–8)", "Season 2 (Weeks 9–16)"], horizontal=True)
     s_num = 1 if "Season 1" in view_season else 2
 
     wes_used = get_used_teams("Wes", s_num)
     sav_used = get_used_teams("Savanna", s_num)
 
-    cols = st.columns(8)
-    for idx, team in enumerate(NFL_TEAMS):
-        with cols[idx % 8]:
-            status = "Available"
-            if team in wes_used and team in sav_used:
-                status = "🔒 Both Used"
-            elif team in wes_used:
-                status = "🔵 Wes Used"
-            elif team in sav_used:
-                status = "🔴 Savanna Used"
+    conf_afc, conf_nfc = st.columns(2)
+
+    for conf_name, conf_col in [("AFC", conf_afc), ("NFC", conf_nfc)]:
+        with conf_col:
+            st.markdown(f"### {conf_name}")
+            div_cols = st.columns(4)
+            divisions = ["East", "North", "South", "West"]
             
-            st.metric(label=team, value=status)
+            for idx, div_name in enumerate(divisions):
+                with div_cols[idx]:
+                    st.markdown(f"**{div_name}**")
+                    teams_in_div = DIVISIONS[conf_name][div_name]
+                    
+                    for team in teams_in_div:
+                        logo_code = ESPN_LOGOS.get(team, team.lower())
+                        logo_url = f"https://a.espncdn.com/i/teamlogos/nfl/500/{logo_code}.png"
+                        
+                        # Determine pick status
+                        if team in wes_used and team in sav_used:
+                            badge = "🔒 Both"
+                        elif team in wes_used:
+                            badge = "🔵 Wes"
+                        elif team in sav_used:
+                            badge = "🔴 Savanna"
+                        else:
+                            badge = "🟢 Available"
+
+                        with st.container(border=True):
+                            c_img, c_lbl = st.columns([1, 2])
+                            with c_img:
+                                st.image(logo_url, width=40)
+                            with c_lbl:
+                                st.markdown(f"**{team}**")
+                                st.caption(badge)
 
 # ---------------------------------------------------------
 # TAB 3: LIVE SLEEPER PLAYER POOL & PROJECTIONS
@@ -268,11 +306,9 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Determine Sleeper state year
         nfl_state = fetch_nfl_state()
         season_year = nfl_state.get("season", "2026")
 
-        # Fetch live weekly projections directly from Sleeper API
         projections_data = fetch_weekly_projections(season_year, p_week_num)
 
         team_players = []
@@ -282,13 +318,11 @@ with tab_players:
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
                 rank_val = pdata.get("search_rank")
                 
-                # Retrieve exact projected PPR score directly from Sleeper
                 p_proj = 0.0
                 if str(pid) in projections_data:
                     p_stats = projections_data[str(pid)].get("stats", {})
                     p_proj = calculate_ppr_from_stats(p_stats)
 
-                # Headshot URL from Sleeper CDN
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
@@ -303,7 +337,6 @@ with tab_players:
                     "Headshot": headshot_url
                 })
 
-        # Sort by rank/relevance
         team_players = sorted(team_players, key=lambda x: x["Rank"])
 
         pos_tabs = st.tabs(["QB", "RB", "WR", "TE", "K", "DEF"])
