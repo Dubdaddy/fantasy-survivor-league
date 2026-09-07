@@ -12,18 +12,17 @@ st.set_page_config(
     page_icon="🏈"
 )
 
-# --- INJECT CUSTOM CSS TO PIN HEADSHOTS TO THE BOTTOM ---
+# --- INJECT CUSTOM CSS FOR HEADSHOT FRAMING ---
 st.markdown("""
     <style>
-    /* Align card columns to the bottom and pin headshots to the bottom edge */
-    div[data-testid="stHorizontalBlock"] {
-        align-items: flex-end !important;
-    }
-    div[data-testid="stHorizontalBlock"] > div:first-child {
-        display: flex;
-        align-items: flex-end;
-        justify-content: center;
-        margin-bottom: -16px;
+    /* Add a clean border, subtle shadow, and light background frame to player headshots */
+    div[data-testid="stColumn"] img {
+        border: 1px solid #e0e0e0;
+        border-radius: 12px;
+        background-color: #f8f9fa;
+        padding: 4px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        object-fit: cover;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -366,9 +365,9 @@ with tab_players:
                     for i, p in enumerate(filtered):
                         with p_cols[i % 3]:
                             with st.container(border=True):
-                                col_img, col_info = st.columns([1, 2.2])
+                                col_img, col_info = st.columns([1, 2])
                                 with col_img:
-                                    st.image(p["Headshot"], width=100)
+                                    st.image(p["Headshot"], width=80)
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
@@ -377,4 +376,4 @@ with tab_players:
                                         value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
                                     )
                 else:
-                    st.write(f"No active {pos} found for selected teams.")
+                    st.write(f"No active {pos} assets found for selected teams.")
