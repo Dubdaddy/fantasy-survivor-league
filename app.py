@@ -4,6 +4,7 @@ import os
 import random
 import time
 import requests
+from bs4 import BeautifulSoup
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -93,25 +94,30 @@ def fetch_nfl_players():
         pass
     return {}
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def fetch_leaguelogs_market():
-    """Fetches player market valuations directly from LeagueLogs Developer API."""
-    url = "https://developer.leaguelogs.com/v1/market/redraft_ppr"
+    """Scrapes redraft PPR market rankings directly from leaguelogs.com."""
+    url = "https://leaguelogs.com/rankings/redraft/ppr"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    val_map = {}
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            data = response.json()
-            # Map Sleeper Player ID -> Market Value / Projection Score
-            val_map = {}
-            for item in data.get("players", []):
-                p_id = item.get("sleeperPlayerId")
-                val = item.get("value", 0.0)
-                if p_id:
-                    val_map[str(p_id)] = val
-            return val_map
+            soup = BeautifulSoup(response.text, "html.parser")
+            rows = soup.find_all("tr")
+            for row in rows:
+                cols = row.find_all("td")
+                if len(cols) >= 5:
+                    name = cols[1].get_text(strip=True)
+                    val_str = cols[4].get_text(strip=True).replace(",", "")
+                    try:
+                        val = float(val_str)
+                        val_map[name] = val
+                    except ValueError:
+                        pass
     except Exception:
         pass
-    return {}
+    return val_map
 
 players_db = fetch_nfl_players()
 leaguelogs_market = fetch_leaguelogs_market()
@@ -285,8 +291,8 @@ with tab_players:
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}".strip()
                 rank_val = pdata.get("search_rank")
                 
-                # Fetch valuation directly from LeagueLogs API map
-                p_val = leaguelogs_market.get(str(pid), 0.0)
+                # Match player name with parsed LeagueLogs map
+                p_val = leaguelogs_market.get(full_name, 0.0)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -323,9 +329,7 @@ with tab_players:
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     st.metric(
                                         label="LeagueLogs Value",
-                                        value=f"{p['Value']:.1f}" if p['Value'] > 0 else "N/A"
+                                        value=f"{p['Value']:,.0f}" if p['Value'] > 0 else "--"
                                     )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
-
-        st.caption("Powered by the LeagueLogs API")
