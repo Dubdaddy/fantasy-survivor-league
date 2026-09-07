@@ -12,6 +12,26 @@ st.set_page_config(
     page_icon="🏈"
 )
 
+# --- INJECT CUSTOM CSS FOR HEADSHOT ALIGNMENT & VISUALS ---
+st.markdown("""
+    <style>
+    /* Force column containing image to align flush at the bottom */
+    div[data-testid="stColumn"]:first-child {
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        padding-bottom: 0px !important;
+    }
+    
+    /* Ensure headshot image fills full width and rests on bottom border */
+    div[data-testid="stColumn"]:first-child img {
+        margin-bottom: -6px !important;
+        border-bottom-left-radius: 8px;
+        object-fit: cover;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- NFL DIVISIONS DATA ---
 DIVISIONS = {
     "AFC": {
@@ -350,9 +370,10 @@ with tab_players:
                     for i, p in enumerate(filtered):
                         with p_cols[i % 3]:
                             with st.container(border=True):
-                                col_img, col_info = st.columns([1, 2])
+                                col_img, col_info = st.columns([1, 2.2])
                                 with col_img:
-                                    st.image(p["Headshot"], width=75)
+                                    # Increased width to 100px so headshots fill the column height
+                                    st.image(p["Headshot"], width=100)
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
