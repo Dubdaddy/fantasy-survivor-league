@@ -82,6 +82,36 @@ def fetch_weekly_projections(season_year, week_num):
         pass
     return {}
 
+@st.cache_data(ttl=3600)
+def fetch_season_stats(season_year):
+    url = f"https://api.sleeper.app/v1/stats/nfl/regular/{season_year}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return {}
+
+def calculate_ppr_points(stats_dict):
+    """Calculates PPR points manually if precomputed pts_ppr is absent."""
+    if not stats_dict:
+        return 0.0
+    if "pts_ppr" in stats_dict:
+        return float(stats_dict["pts_ppr"])
+    
+    # Manual PPR calculation
+    pts = 0.0
+    pts += float(stats_dict.get("pass_yd", 0)) * 0.04
+    pts += float(stats_dict.get("pass_td", 0)) * 4.0
+    pts -= float(stats_dict.get("pass_int", 0)) * 2.0
+    pts += float(stats_dict.get("rush_yd", 0)) * 0.1
+    pts += float(stats_dict.get("rush_td", 0)) * 6.0
+    pts += float(stats_dict.get("rec", 0)) * 1.0
+    pts += float(stats_dict.get("rec_yd", 0)) * 0.1
+    pts += float(stats_dict.get("rec_td", 0)) * 6.0
+    return round(pts, 1)
+
 players_db = fetch_nfl_players()
 
 # --- SIDEBAR LOGIN ---
@@ -123,7 +153,7 @@ with tab_draft:
         week_num = int(selected_week.split()[1])
         season = 1 if week_num <= 8 else 2
 
-        # Alternating First Pick (Odd weeks = Savanna 1st, Even weeks = Wes 1st)
+        # Alternating First Pick
         first_picker = "Savanna" if week_num % 2 != 0 else "Wes"
         st.caption(f"📢 First Pick Priority for {selected_week}: **{first_picker}**")
 
@@ -210,7 +240,7 @@ with tab_grid:
             st.metric(label=team, value=status)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL & PROJECTIONS WITH HEADSHOTS
+# TAB 3: PLAYER POOL WITH PROJECTIONS & APPG
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -226,20 +256,26 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch weekly projections
+        # Fetch weekly projections & season stats
         projections_data = fetch_weekly_projections(2026, p_week_num)
+        season_stats_data = fetch_season_stats(2025) # Default/Prior baseline stats
 
         team_players = []
         for pid, pdata in players_db.items():
             if pdata.get("team") in active_teams and pdata.get("active"):
                 rank_val = pdata.get("search_rank")
                 
-                # Retrieve projected PPR score from Sleeper
-                p_proj = 0.0
-                if pid in projections_data and "stats" in projections_data[pid]:
-                    p_proj = projections_data[pid]["stats"].get("pts_ppr", 0.0)
+                # Projections Calculation
+                proj_dict = projections_data.get(pid, {}).get("stats", {})
+                proj_ppr = calculate_ppr_points(proj_dict)
 
-                # Sleeper Headshot URL
+                # Average Points Per Game (APPG) Calculation
+                season_dict = season_stats_data.get(pid, {}).get("stats", {})
+                total_season_pts = calculate_ppr_points(season_dict)
+                games_played = float(season_dict.get("gp", 1.0))
+                appg = round(total_season_pts / games_played, 1) if games_played > 0 else 0.0
+
+                # Headshot Image URL
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{pdata.get('team').lower()}.png"
@@ -250,7 +286,8 @@ with tab_players:
                     "Position": pdata.get("position"),
                     "Team": pdata.get("team"),
                     "Rank": rank_val if rank_val is not None else 999999,
-                    "ProjectedPPR": p_proj,
+                    "ProjPPR": proj_ppr,
+                    "APPG": appg,
                     "Headshot": headshot_url
                 })
 
@@ -273,9 +310,17 @@ with tab_players:
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} | {p['Position']}")
-                                    st.metric(
-                                        label="Proj. PPR",
-                                        value=f"{p['ProjectedPPR']:.1f} pts" if p['ProjectedPPR'] > 0 else "N/A"
-                                    )
+                                    
+                                    m_col1, m_col2 = st.columns(2)
+                                    with m_col1:
+                                        st.metric(
+                                            label="Proj PPR",
+                                            value=f"{p['ProjPPR']:.1f}" if p['ProjPPR'] > 0 else "--"
+                                        )
+                                    with m_col2:
+                                        st.metric(
+                                            label="APPG",
+                                            value=f"{p['APPG']:.1f}" if p['APPG'] > 0 else "--"
+                                        )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
