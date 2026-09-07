@@ -71,6 +71,18 @@ def fetch_nfl_players():
         pass
     return {}
 
+@st.cache_data(ttl=1800)
+def fetch_nfl_state():
+    """Fetches current NFL season state from Sleeper (season year, week, etc.)."""
+    url = "https://api.sleeper.app/v1/state/nfl"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return {"season": "2026", "week": 1}
+
 @st.cache_data(ttl=900)
 def fetch_weekly_projections(season_year, week_num):
     """Fetches live weekly projections directly from Sleeper API."""
@@ -78,42 +90,39 @@ def fetch_weekly_projections(season_year, week_num):
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
-            return response.json()
+            res_json = response.json()
+            # If current season endpoint returns empty, try fallback to active season state
+            if not res_json and season_year != "2025":
+                fallback_url = f"https://api.sleeper.app/v1/projections/nfl/regular/2025/{week_num}"
+                fb_res = requests.get(fallback_url, timeout=10)
+                if fb_res.status_code == 200:
+                    return fb_res.json()
+            return res_json
     except Exception:
         pass
     return {}
 
-@st.cache_data(ttl=3600)
-def fetch_weekly_schedule(season_year, week_num):
-    """Fetches live schedule from Sleeper for exact team matchups."""
-    url = f"https://api.sleeper.app/v1/schedule/nfl/regular/{season_year}/{week_num}"
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass
-    return []
-
-def get_sleeper_ppr_projection(p_stats):
-    """Calculates PPR projection directly from Sleeper's stat projections."""
-    if not p_stats:
+def calculate_ppr_from_stats(stats_dict):
+    """Calculates exact PPR score directly from Sleeper's stat projection dictionary."""
+    if not stats_dict:
         return 0.0
     
-    # 1. Use Sleeper's precalculated pts_ppr if present
-    if "pts_ppr" in p_stats and p_stats["pts_ppr"] is not None:
-        return float(p_stats["pts_ppr"])
-    
-    # 2. Calculate directly from Sleeper's projected stat fields
+    # 1. Direct pts_ppr check
+    if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
+        return float(stats_dict["pts_ppr"])
+    if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
+        return float(stats_dict["pts_half_ppr"])
+
+    # 2. Formula-based calculation from raw stat fields
     pts = 0.0
-    pts += float(p_stats.get("pass_yd", 0) or 0) * 0.04
-    pts += float(p_stats.get("pass_td", 0) or 0) * 4.0
-    pts -= float(p_stats.get("pass_int", 0) or 0) * 2.0
-    pts += float(p_stats.get("rush_yd", 0) or 0) * 0.1
-    pts += float(p_stats.get("rush_td", 0) or 0) * 6.0
-    pts += float(p_stats.get("rec", 0) or 0) * 1.0
-    pts += float(p_stats.get("rec_yd", 0) or 0) * 0.1
-    pts += float(p_stats.get("rec_td", 0) or 0) * 6.0
+    pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
+    pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
+    pts -= float(stats_dict.get("pass_int", 0) or 0) * 2.0
+    pts += float(stats_dict.get("rush_yd", 0) or 0) * 0.1
+    pts += float(stats_dict.get("rush_td", 0) or 0) * 6.0
+    pts += float(stats_dict.get("rec", 0) or 0) * 1.0
+    pts += float(stats_dict.get("rec_yd", 0) or 0) * 0.1
+    pts += float(stats_dict.get("rec_td", 0) or 0) * 6.0
     return round(pts, 2)
 
 players_db = fetch_nfl_players()
@@ -259,19 +268,12 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch live weekly projections and schedule directly from Sleeper API
-        projections_data = fetch_weekly_projections(2026, p_week_num)
-        schedule_data = fetch_weekly_schedule(2026, p_week_num)
+        # Determine Sleeper state year
+        nfl_state = fetch_nfl_state()
+        season_year = nfl_state.get("season", "2026")
 
-        # Build live opponent mapping for the week
-        opp_map = {}
-        if isinstance(schedule_data, list):
-            for game in schedule_data:
-                home = game.get("home_team")
-                away = game.get("away_team")
-                if home and away:
-                    opp_map[home] = f"vs {away}"
-                    opp_map[away] = f"@{home}"
+        # Fetch live weekly projections directly from Sleeper API
+        projections_data = fetch_weekly_projections(season_year, p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
@@ -284,10 +286,7 @@ with tab_players:
                 p_proj = 0.0
                 if str(pid) in projections_data:
                     p_stats = projections_data[str(pid)].get("stats", {})
-                    p_proj = get_sleeper_ppr_projection(p_stats)
-
-                # Opponent lookup
-                matchup_str = opp_map.get(team_code, f"Week {p_week_num}")
+                    p_proj = calculate_ppr_from_stats(p_stats)
 
                 # Headshot URL from Sleeper CDN
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
@@ -299,7 +298,6 @@ with tab_players:
                     "Name": full_name,
                     "Position": pdata.get("position"),
                     "Team": team_code,
-                    "Opponent": matchup_str,
                     "Rank": rank_val if rank_val is not None else 999999,
                     "ProjPPR": p_proj,
                     "Headshot": headshot_url
@@ -324,7 +322,7 @@ with tab_players:
                                     st.image(p["Headshot"], width=75)
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
-                                    st.caption(f"{p['Team']} ({p['Opponent']}) | {p['Position']}")
+                                    st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     st.metric(
                                         label="Proj PPR Points",
                                         value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "0.00"
