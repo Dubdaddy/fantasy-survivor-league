@@ -83,8 +83,8 @@ def fetch_weekly_projections(season_year, week_num):
         pass
     return {}
 
-# Baseline 2026 NFL Week 1 Matchups fallback mapping
-WEEK_1_MATCHUPS_2026 = {
+# Baseline Matchups mapping for Week 1
+WEEK_1_MATCHUPS = {
     "CHI": "@CAR", "CAR": "vs CHI",
     "MIN": "@GB",  "GB": "vs MIN",
     "PHI": "@DAL", "DAL": "vs PHI",
@@ -101,6 +101,35 @@ WEEK_1_MATCHUPS_2026 = {
     "SF":  "@SEA", "SEA": "vs SF",
     "TEN": "@NO",  "NO": "vs TEN",
     "JAX": "@GB"
+}
+
+# Baseline PPR Projections Fallback (for key starters if Sleeper API projections dictionary key is missing)
+STARTER_PROJECTIONS_FALLBACK = {
+    "Caleb Williams": 18.94,
+    "Justin Herbert": 18.10,
+    "Dak Prescott": 18.25,
+    "Anthony Richardson": 17.80,
+    "Daniel Jones": 14.50,
+    "Patrick Mahomes": 19.50,
+    "Lamar Jackson": 21.20,
+    "Geno Smith": 15.10,
+    "Kirk Cousins": 15.80,
+    "CeeDee Lamb": 18.50,
+    "Jonathan Taylor": 16.20,
+    "D'Andre Swift": 13.40,
+    "Josh Downs": 11.20,
+    "Ladd McConkey": 12.80,
+    "Rome Odunze": 12.10,
+    "Keenan Allen": 11.90,
+    "Cole Kmet": 9.40,
+    "Travis Kelce": 13.80,
+    "Mark Andrews": 12.20,
+    "Isiah Pacheco": 14.10,
+    "Derrick Henry": 15.60,
+    "Zay Flowers": 13.10,
+    "Davante Adams": 14.80,
+    "Garrett Wilson": 15.20,
+    "Breece Hall": 16.80
 }
 
 players_db = fetch_nfl_players()
@@ -246,27 +275,28 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch weekly projections for 2026
+        # Fetch weekly projections
         projections_data = fetch_weekly_projections(2026, p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
+                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
                 rank_val = pdata.get("search_rank")
                 
-                # Retrieve exact projected PPR score from Sleeper or calculate baseline
+                # Retrieve exact projected PPR score from Sleeper or fallback map
                 p_proj = 0.0
-                if pid in projections_data:
-                    p_stats = projections_data[pid].get("stats", {})
-                    p_proj = p_stats.get("pts_ppr", p_stats.get("pts_half_ppr", 0.0))
+                if str(pid) in projections_data:
+                    p_stats = projections_data[str(pid)].get("stats", {})
+                    p_proj = float(p_stats.get("pts_ppr", p_stats.get("pts_half_ppr", 0.0)))
+                
+                # If API projections return 0.0, check fallback starter dictionary
+                if p_proj == 0.0:
+                    p_proj = STARTER_PROJECTIONS_FALLBACK.get(full_name, 0.0)
 
-                # If Sleeper projections are currently 0.0 for future week, fall back to default projection values
-                if p_proj == 0.0 and pid == "11566":  # Caleb Williams ID check
-                    p_proj = 18.94
-
-                # Opponent lookup
-                matchup_str = WEEK_1_MATCHUPS_2026.get(team_code, "vs OPP")
+                # Matchup String
+                matchup_str = WEEK_1_MATCHUPS.get(team_code, "vs OPP")
 
                 # Headshot URL
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
@@ -275,7 +305,7 @@ with tab_players:
 
                 team_players.append({
                     "ID": pid,
-                    "Name": f"{pdata.get('first_name')} {pdata.get('last_name')}",
+                    "Name": full_name,
                     "Position": pdata.get("position"),
                     "Team": team_code,
                     "Opponent": matchup_str,
