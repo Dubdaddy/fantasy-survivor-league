@@ -12,6 +12,66 @@ st.set_page_config(
     page_icon="🏈"
 )
 
+# --- INJECT CUSTOM CSS FOR CARD HEADSHOTS ---
+st.markdown("""
+    <style>
+    .player-card {
+        display: flex;
+        background-color: #f9f9fb;
+        border: 1px solid #e1e4e8;
+        border-radius: 10px;
+        overflow: hidden;
+        margin-bottom: 12px;
+        height: 110px;
+    }
+    .player-img-container {
+        width: 35%;
+        background-color: #eef2f5;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .player-img-container img {
+        height: 100%;
+        width: 100%;
+        object-fit: cover;
+    }
+    .player-info-container {
+        width: 65%;
+        padding: 10px 14px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .player-name {
+        font-weight: 700;
+        font-size: 15px;
+        color: #1f2937;
+        margin: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .player-meta {
+        font-size: 12px;
+        color: #6b7280;
+        margin-bottom: 4px;
+    }
+    .player-stat-val {
+        font-size: 20px;
+        font-weight: 800;
+        color: #111827;
+        line-height: 1;
+    }
+    .player-stat-lbl {
+        font-size: 10px;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # --- NFL DIVISIONS DATA ---
 DIVISIONS = {
     "AFC": {
@@ -42,7 +102,7 @@ ESPN_LOGOS = {
     "SF": "sf",   "TB": "tb",   "TEN": "ten", "WAS": "was"
 }
 
-# --- BASELINE PROJECTIONS MAP (Fallback for Offseason/Pre-Game) ---
+# --- BASELINE PROJECTIONS MAP ---
 DEFAULT_PROJECTIONS = {
     "Caleb Williams": 18.94,
     "Justin Herbert": 18.10,
@@ -178,7 +238,6 @@ with tab_draft:
 
         st.subheader(f"{current_user}'s Draft Room ({selected_week})")
 
-        # Standard Selection
         if len(available_teams) >= 4:
             valid_defaults = [t for t in my_current_picks if t in available_teams]
             
@@ -197,7 +256,6 @@ with tab_draft:
                 else:
                     st.warning("Please select exactly 4 teams.")
 
-        # Week 8 / 16 Wheel Spin Trigger
         else:
             st.warning(f"Only {len(available_teams)} fresh team(s) remaining for selection in Season {season}!")
             valid_defaults = [t for t in my_current_picks if t in available_teams]
@@ -272,7 +330,7 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: PLAYER POOL
+# TAB 3: SORTED PLAYER POOL WITH FULL-BLEED HEADSHOTS
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -292,9 +350,8 @@ with tab_players:
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}".strip()
-                rank_val = pdata.get("search_rank")
                 
-                # Fetch projection value
+                # Projection calculation
                 p_proj = DEFAULT_PROJECTIONS.get(full_name, 0.00)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
@@ -306,12 +363,16 @@ with tab_players:
                     "Name": full_name,
                     "Position": pdata.get("position"),
                     "Team": team_code,
-                    "Rank": rank_val if rank_val is not None else 999999,
                     "ProjPPR": p_proj,
                     "Headshot": headshot_url
                 })
 
-        team_players = sorted(team_players, key=lambda x: x["Rank"])
+        # --- SORT BY PROJECTED PPR POINTS DESCENDING ---
+        team_players = sorted(team_players, key=lambda x: x["ProjPPR"], reverse=True)
+
+        # Calculate Total Team Top Projections
+        total_top_proj = sum(p["ProjPPR"] for p in team_players[:10])
+        st.metric(label=f"Total Top 10 Projected Starters ({p_user})", value=f"{total_top_proj:.2f} PPR pts")
 
         pos_tabs = st.tabs(["QB", "RB", "WR", "TE", "K", "DEF"])
         positions = ["QB", "RB", "WR", "TE", "K", "DEF"]
@@ -323,16 +384,21 @@ with tab_players:
                     p_cols = st.columns(3)
                     for i, p in enumerate(filtered):
                         with p_cols[i % 3]:
-                            with st.container(border=True):
-                                col_img, col_info = st.columns([1, 2])
-                                with col_img:
-                                    st.image(p["Headshot"], width=75)
-                                with col_info:
-                                    st.markdown(f"**{p['Name']}**")
-                                    st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
-                                    st.metric(
-                                        label="Proj PPR Points",
-                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "--"
-                                    )
+                            # Render Full-Bleed Headshot Card
+                            val_display = f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "--"
+                            card_html = f"""
+                            <div class="player-card">
+                                <div class="player-img-container">
+                                    <img src="{p['Headshot']}" alt="{p['Name']}">
+                                </div>
+                                <div class="player-info-container">
+                                    <div class="player-name">{p['Name']}</div>
+                                    <div class="player-meta">{p['Team']} ({p_week_str}) | {p['Position']}</div>
+                                    <div class="player-stat-val">{val_display}</div>
+                                    <div class="player-stat-lbl">Proj PPR Points</div>
+                                </div>
+                            </div>
+                            """
+                            st.markdown(card_html, unsafe_allow_html=True)
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
