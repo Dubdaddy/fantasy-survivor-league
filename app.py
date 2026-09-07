@@ -34,11 +34,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- PERSISTENT CLOUD STORAGE CONFIGURATION (JSONBIN) ---
+# --- PERSISTENT CLOUD STORAGE CONFIGURATION (JSONBIN & FANTASYPROS) ---
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9ef978ffd5d16053ea44d8")
 JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$Ag5xmAzaVFlgJZyw.WrG8u5sSq8QvEI3yxcRsT9ifO835MLfTRhDu")
+FP_API_KEY = st.secrets.get("FANTASYPROS_API_KEY", "oBmWgMxsyo7X9SminwGJGaxYd5sNH3Sg1aYqpaW8")
 
-HEADERS = {
+HEADERS_JSONBIN = {
     "Content-Type": "application/json",
     "X-Master-Key": JSONBIN_API_KEY
 }
@@ -46,7 +47,7 @@ HEADERS = {
 def load_picks():
     url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
     try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
+        response = requests.get(url, headers=HEADERS_JSONBIN, timeout=10)
         if response.status_code == 200:
             return response.json().get("record", {})
     except Exception as e:
@@ -60,7 +61,7 @@ def load_picks():
 def save_picks(data):
     url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
     try:
-        response = requests.put(url, json=data, headers=HEADERS, timeout=10)
+        response = requests.put(url, json=data, headers=HEADERS_JSONBIN, timeout=10)
         if response.status_code == 200:
             return True
     except Exception as e:
@@ -161,40 +162,18 @@ def fetch_nfl_state():
     return {"season": "2026", "week": 1}
 
 @st.cache_data(ttl=900)
-def fetch_weekly_projections(season_year, week_num):
-    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
+def fetch_fp_projections(week_num):
+    """Fetches projections directly from FantasyPros API using x-api-key."""
+    url = "https://api.fantasypros.com/public/v2/json/nfl/2026/projections"
+    headers = {"x-api-key": FP_API_KEY}
+    params = {"scoring": "PPR", "week": week_num}
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            res_json = response.json()
-            if not res_json and season_year != "2025":
-                fallback_url = f"https://api.sleeper.app/v1/projections/nfl/regular/2025/{week_num}"
-                fb_res = requests.get(fallback_url, timeout=10)
-                if fb_res.status_code == 200:
-                    return fb_res.json()
-            return res_json
-    except Exception:
-        pass
+        res = requests.get(url, headers=headers, params=params, timeout=10)
+        if res.status_code == 200:
+            return res.json()
+    except Exception as e:
+        st.error(f"Error fetching FantasyPros projections: {e}")
     return {}
-
-def calculate_ppr_from_stats(stats_dict):
-    if not stats_dict:
-        return 0.0
-    if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
-        return float(stats_dict["pts_ppr"])
-    if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
-        return float(stats_dict["pts_half_ppr"])
-
-    pts = 0.0
-    pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
-    pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
-    pts -= float(stats_dict.get("pass_int", 0) or 0) * 2.0
-    pts += float(stats_dict.get("rush_yd", 0) or 0) * 0.1
-    pts += float(stats_dict.get("rush_td", 0) or 0) * 6.0
-    pts += float(stats_dict.get("rec", 0) or 0) * 1.0
-    pts += float(stats_dict.get("rec_yd", 0) or 0) * 0.1
-    pts += float(stats_dict.get("rec_td", 0) or 0) * 6.0
-    return round(pts, 2)
 
 players_db = fetch_nfl_players()
 
@@ -346,7 +325,7 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: LIVE SLEEPER PLAYER POOL & PROJECTIONS
+# TAB 3: LIVE PLAYER POOL & PROJECTIONS
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
@@ -362,10 +341,8 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        nfl_state = fetch_nfl_state()
-        season_year = nfl_state.get("season", "2026")
-
-        projections_data = fetch_weekly_projections(season_year, p_week_num)
+        # Fetch exclusively from FantasyPros API
+        fp_projections = fetch_fp_projections(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
@@ -376,11 +353,12 @@ with tab_players:
                 
                 p_proj = 0.0
                 p_avg = 0.0
-                if str(pid) in projections_data:
-                    p_stats = projections_data[str(pid)].get("stats", {})
-                    p_proj = calculate_ppr_from_stats(p_stats)
-                    if "pts_ppr_avg" in p_stats and p_stats["pts_ppr_avg"] is not None:
-                        p_avg = float(p_stats["pts_ppr_avg"])
+                
+                # Match player against FantasyPros output payload
+                if isinstance(fp_projections, list):
+                    match = next((item for item in fp_projections if item.get("player_name") == full_name), None)
+                    if match:
+                        p_proj = float(match.get("fpts", 0.0) or 0.0)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
