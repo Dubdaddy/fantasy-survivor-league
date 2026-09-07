@@ -34,6 +34,39 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- PERSISTENT CLOUD STORAGE CONFIGURATION (JSONBIN) ---
+JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9ef978ffd5d16053ea44d8")
+JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$Ag5xmAzaVFlgJZyw.WrG8u5sSq8QvEI3yxcRsT9ifO835MLfTRhDu")
+
+HEADERS = {
+    "Content-Type": "application/json",
+    "X-Master-Key": JSONBIN_API_KEY
+}
+
+def load_picks():
+    url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        if response.status_code == 200:
+            return response.json().get("record", {})
+    except Exception as e:
+        st.error(f"Error loading picks from cloud: {e}")
+    
+    return {
+        "Wes": {f"Week {w}": [] for w in range(1, 17)},
+        "Savanna": {f"Week {w}": [] for w in range(1, 17)}
+    }
+
+def save_picks(data):
+    url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+    try:
+        response = requests.put(url, json=data, headers=HEADERS, timeout=10)
+        if response.status_code == 200:
+            return True
+    except Exception as e:
+        st.error(f"Error saving picks to cloud: {e}")
+    return False
+
 # --- NFL DIVISIONS DATA ---
 DIVISIONS = {
     "AFC": {
@@ -89,25 +122,6 @@ USERS = {
     "Wes": "wes123",        
     "Savanna": "sav123"
 }
-
-# --- PERSISTENT FILE STORAGE ---
-DATA_FILE = "picks.json"
-
-def load_picks():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
-        "Wes": {f"Week {w}": [] for w in range(1, 17)},
-        "Savanna": {f"Week {w}": [] for w in range(1, 17)}
-    }
-
-def save_picks(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
 
 # --- INITIALIZE SESSION STATE ---
 if "user" not in st.session_state:
@@ -376,7 +390,7 @@ with tab_players:
                 depth_order = pdata.get("depth_chart_order")
                 depth_str = f"{pdata.get('position')}{depth_order}" if depth_order else pdata.get("position")
 
-                # Clean Weekly Opponent Matchup (removed Week X text)
+                # Clean Weekly Opponent Matchup
                 opp_matchup = WEEK_1_MATCHUPS.get(team_code, "")
                 team_opp_str = f"{team_code} {opp_matchup}".strip()
 
@@ -428,7 +442,6 @@ with tab_players:
 
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
-                                    # Render clean team matchup and depth chart role
                                     st.caption(f"{p['TeamMatchup']} | **{p['DepthRole']}**")
                                     
                                     m1, m2 = st.columns(2)
