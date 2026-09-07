@@ -337,7 +337,8 @@ with tab_players:
                     "Headshot": headshot_url
                 })
 
-        team_players = sorted(team_players, key=lambda x: x["Rank"])
+        # --- SORT BY HIGHEST PROJECTED PPR POINTS FIRST ---
+        team_players = sorted(team_players, key=lambda x: x["ProjPPR"], reverse=True)
 
         pos_tabs = st.tabs(["QB", "RB", "WR", "TE", "K", "DEF"])
         positions = ["QB", "RB", "WR", "TE", "K", "DEF"]
