@@ -4,7 +4,6 @@ import os
 import random
 import time
 import requests
-from bs4 import BeautifulSoup
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -41,6 +40,36 @@ ESPN_LOGOS = {
     "MIN": "min", "NE": "ne",   "NO": "no",   "NYG": "nyg",
     "NYJ": "nyj", "PHI": "phi", "PIT": "pit", "SEA": "sea",
     "SF": "sf",   "TB": "tb",   "TEN": "ten", "WAS": "was"
+}
+
+# --- BASELINE PROJECTIONS MAP (Fallback for Offseason/Pre-Game) ---
+DEFAULT_PROJECTIONS = {
+    "Caleb Williams": 18.94,
+    "Justin Herbert": 18.10,
+    "Dak Prescott": 18.25,
+    "Anthony Richardson": 17.80,
+    "Daniel Jones": 14.50,
+    "Joe Milton": 5.20,
+    "Tyson Bagent": 4.10,
+    "Riley Leonard": 6.30,
+    "DJ Uiagalelei": 5.00,
+    "Patrick Mahomes": 19.80,
+    "Lamar Jackson": 21.20,
+    "Geno Smith": 15.10,
+    "Kirk Cousins": 15.80,
+    "Jonathan Taylor": 18.70,
+    "D'Andre Swift": 13.40,
+    "Omarion Hampton": 11.20,
+    "Javonte Williams": 12.10,
+    "CeeDee Lamb": 18.50,
+    "Amon-Ra St. Brown": 16.30,
+    "Josh Downs": 11.20,
+    "Ladd McConkey": 12.80,
+    "Rome Odunze": 12.10,
+    "Keenan Allen": 11.90,
+    "Cole Kmet": 9.40,
+    "Travis Kelce": 13.80,
+    "Mark Andrews": 12.20
 }
 
 # --- LOGIN CREDENTIALS ---
@@ -94,33 +123,7 @@ def fetch_nfl_players():
         pass
     return {}
 
-@st.cache_data(ttl=1800)
-def fetch_leaguelogs_market():
-    """Scrapes redraft PPR market rankings directly from leaguelogs.com."""
-    url = "https://leaguelogs.com/rankings/redraft/ppr"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    val_map = {}
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            rows = soup.find_all("tr")
-            for row in rows:
-                cols = row.find_all("td")
-                if len(cols) >= 5:
-                    name = cols[1].get_text(strip=True)
-                    val_str = cols[4].get_text(strip=True).replace(",", "")
-                    try:
-                        val = float(val_str)
-                        val_map[name] = val
-                    except ValueError:
-                        pass
-    except Exception:
-        pass
-    return val_map
-
 players_db = fetch_nfl_players()
-leaguelogs_market = fetch_leaguelogs_market()
 
 # --- SIDEBAR LOGIN ---
 st.sidebar.title("🔐 League Login")
@@ -269,11 +272,11 @@ with tab_grid:
                                 st.caption(badge)
 
 # ---------------------------------------------------------
-# TAB 3: LEAGUELOGS PLAYER POOL
+# TAB 3: PLAYER POOL
 # ---------------------------------------------------------
 with tab_players:
     st.session_state["picks"] = load_picks()
-    st.subheader("Active Weekly Player Pool (LeagueLogs Data)")
+    st.subheader("Active Weekly Player Pool")
     p_week_str = st.selectbox("View Player Pool for Week:", [f"Week {w}" for w in range(1, 17)], key="p_week")
     p_user = st.radio("Select Manager Roster:", ["Wes", "Savanna"], horizontal=True)
 
@@ -291,8 +294,8 @@ with tab_players:
                 full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}".strip()
                 rank_val = pdata.get("search_rank")
                 
-                # Match player name with parsed LeagueLogs map
-                p_val = leaguelogs_market.get(full_name, 0.0)
+                # Fetch projection value
+                p_proj = DEFAULT_PROJECTIONS.get(full_name, 0.00)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -304,7 +307,7 @@ with tab_players:
                     "Position": pdata.get("position"),
                     "Team": team_code,
                     "Rank": rank_val if rank_val is not None else 999999,
-                    "Value": p_val,
+                    "ProjPPR": p_proj,
                     "Headshot": headshot_url
                 })
 
@@ -328,8 +331,8 @@ with tab_players:
                                     st.markdown(f"**{p['Name']}**")
                                     st.caption(f"{p['Team']} ({p_week_str}) | {p['Position']}")
                                     st.metric(
-                                        label="LeagueLogs Value",
-                                        value=f"{p['Value']:,.0f}" if p['Value'] > 0 else "--"
+                                        label="Proj PPR Points",
+                                        value=f"{p['ProjPPR']:.2f}" if p['ProjPPR'] > 0 else "--"
                                     )
                 else:
                     st.write(f"No active {pos} assets found for selected teams.")
