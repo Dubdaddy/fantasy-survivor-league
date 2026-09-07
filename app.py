@@ -372,15 +372,15 @@ with tab_players:
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
 
-                # 1. Depth Chart Rank (e.g. RB1, QB1)
+                # Depth Chart Rank
                 depth_order = pdata.get("depth_chart_order")
                 depth_str = f"{pdata.get('position')}{depth_order}" if depth_order else pdata.get("position")
 
-                # 2. Weekly Opponent
+                # Clean Weekly Opponent Matchup (removed Week X text)
                 opp_matchup = WEEK_1_MATCHUPS.get(team_code, "")
                 team_opp_str = f"{team_code} {opp_matchup}".strip()
 
-                # 3. Injury Status
+                # Injury Status
                 injury_status = pdata.get("injury_status")
                 if not injury_status:
                     status_str = "Healthy"
@@ -418,7 +418,7 @@ with tab_players:
                                 with col_img:
                                     st.image(p["Headshot"], width=115)
                                     
-                                    # Color-coded injury status badge beneath image
+                                    # Color-coded injury status badge
                                     if p["Status"] == "Healthy":
                                         st.caption(f"🟢 **{p['Status']}**")
                                     elif p["Status"] in ["Questionable", "Doubtful"]:
@@ -428,8 +428,8 @@ with tab_players:
 
                                 with col_info:
                                     st.markdown(f"**{p['Name']}**")
-                                    # Displays team opponent + depth chart role
-                                    st.caption(f"{p['TeamMatchup']} ({p_week_str}) | **{p['DepthRole']}**")
+                                    # Render clean team matchup and depth chart role
+                                    st.caption(f"{p['TeamMatchup']} | **{p['DepthRole']}**")
                                     
                                     m1, m2 = st.columns(2)
                                     with m1:
