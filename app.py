@@ -4,7 +4,6 @@ import os
 import random
 import time
 import requests
-import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -35,10 +34,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- PERSISTENT CLOUD STORAGE CONFIGURATION (JSONBIN & FANTASYPROS) ---
+# --- PERSISTENT CLOUD STORAGE CONFIGURATION (JSONBIN) ---
 JSONBIN_BIN_ID = st.secrets.get("JSONBIN_BIN_ID", "6a9ef978ffd5d16053ea44d8")
 JSONBIN_API_KEY = st.secrets.get("JSONBIN_API_KEY", "$2a$10$Ag5xmAzaVFlgJZyw.WrG8u5sSq8QvEI3yxcRsT9ifO835MLfTRhDu")
-FP_API_KEY = st.secrets.get("FANTASYPROS_API_KEY", "oBmWgMxsyo7X9SminwGJGaxYd5sNH3Sg1aYqpaW8")
 
 HEADERS_JSONBIN = {
     "Content-Type": "application/json",
@@ -133,20 +131,31 @@ if "picks" not in st.session_state:
     st.session_state["picks"] = load_picks()
 
 # --- HELPER FUNCTIONS ---
-def clean_name(name):
-    """Normalize names by removing suffixes, punctuation, and extra spaces."""
-    if not name:
-        return ""
-    name = re.sub(r"[.'\"-]", "", name)
-    name = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", name, flags=re.IGNORECASE)
-    return " ".join(name.lower().split())
-
 def get_used_teams(player, season=1):
     weeks = range(1, 9) if season == 1 else range(9, 17)
     used = []
     for w in weeks:
         used.extend(st.session_state["picks"][player][f"Week {w}"])
     return used
+
+def calculate_ppr_from_stats(stats_dict):
+    if not stats_dict:
+        return 0.0
+    if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
+        return float(stats_dict["pts_ppr"])
+    if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
+        return float(stats_dict["pts_half_ppr"])
+
+    pts = 0.0
+    pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
+    pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
+    pts -= float(stats_dict.get("pass_int", 0) or 0) * 2.0
+    pts += float(stats_dict.get("rush_yd", 0) or 0) * 0.1
+    pts += float(stats_dict.get("rush_td", 0) or 0) * 6.0
+    pts += float(stats_dict.get("rec", 0) or 0) * 1.0
+    pts += float(stats_dict.get("rec_yd", 0) or 0) * 0.1
+    pts += float(stats_dict.get("rec_td", 0) or 0) * 6.0
+    return round(pts, 2)
 
 @st.cache_data(ttl=3600)
 def fetch_nfl_players():
@@ -170,30 +179,17 @@ def fetch_nfl_state():
         pass
     return {"season": "2026", "week": 1}
 
-@st.cache_data(ttl=300)
-def fetch_fp_projections_v3(week_num):
-    """Loops across positions to build a complete FantasyPros projection list."""
-    url = "https://api.fantasypros.com/public/v2/json/nfl/2026/projections"
-    headers = {"x-api-key": FP_API_KEY}
-    positions = ["QB", "RB", "WR", "TE", "K", "DST"]
-    all_players = []
-
-    for pos in positions:
-        params = {"scoring": "PPR", "week": week_num, "position": pos}
-        try:
-            res = requests.get(url, headers=headers, params=params, timeout=5)
-            if res.status_code == 200:
-                data = res.json()
-                if isinstance(data, list):
-                    all_players.extend(data)
-                elif isinstance(data, dict):
-                    if "players" in data and isinstance(data["players"], list):
-                        all_players.extend(data["players"])
-                    elif "projections" in data and isinstance(data["projections"], list):
-                        all_players.extend(data["projections"])
-        except Exception:
-            continue
-    return all_players
+@st.cache_data(ttl=900)
+def fetch_sleeper_projections(season_year, week_num):
+    """Fetches weekly projections directly from Sleeper API."""
+    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return {}
 
 players_db = fetch_nfl_players()
 
@@ -361,33 +357,36 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch directly using position loops & refreshed cache
-        fp_projections = fetch_fp_projections_v3(p_week_num)
+        nfl_state = fetch_nfl_state()
+        season_year = nfl_state.get("season", "2026")
+
+        # Fetch directly from Sleeper API
+        sleeper_projections = fetch_sleeper_projections(season_year, p_week_num)
+
+        # --- SLEEPER API DEBUG INSPECTOR ---
+        with st.expander("🔍 Debug: Inspect Sleeper Projections Payload"):
+            st.write(f"Sleeper Projections Count: {len(sleeper_projections)}")
+            if sleeper_projections:
+                first_key = list(sleeper_projections.keys())[0]
+                st.write(f"Sample Entry for Player ID `{first_key}`:")
+                st.json(sleeper_projections[first_key])
 
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
-                raw_full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
-                norm_full_name = clean_name(raw_full_name)
+                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
                 rank_val = pdata.get("search_rank")
                 
                 p_proj = 0.0
                 p_avg = 0.0
                 
-                if isinstance(fp_projections, list):
-                    match = next(
-                        (item for item in fp_projections if clean_name(item.get("name")) == norm_full_name or clean_name(item.get("player_name")) == norm_full_name),
-                        None
-                    )
-                    if match:
-                        stats = match.get("stats", {})
-                        if isinstance(stats, dict):
-                            raw_pts = stats.get("points_ppr") or stats.get("points") or match.get("fpts") or 0.0
-                            try:
-                                p_proj = float(raw_pts)
-                            except (ValueError, TypeError):
-                                p_proj = 0.0
+                # Match against Sleeper projections dictionary by Player ID
+                if str(pid) in sleeper_projections:
+                    p_stats = sleeper_projections[str(pid)].get("stats", {})
+                    p_proj = calculate_ppr_from_stats(p_stats)
+                    if "pts_ppr_avg" in p_stats and p_stats["pts_ppr_avg"] is not None:
+                        p_avg = float(p_stats["pts_ppr_avg"])
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -404,7 +403,7 @@ with tab_players:
 
                 team_players.append({
                     "ID": pid,
-                    "Name": raw_full_name,
+                    "Name": full_name,
                     "Position": pdata.get("position"),
                     "DepthRole": depth_str,
                     "TeamMatchup": team_opp_str,
