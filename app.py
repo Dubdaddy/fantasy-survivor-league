@@ -163,17 +163,33 @@ def fetch_nfl_state():
 
 @st.cache_data(ttl=900)
 def fetch_fp_projections(week_num):
-    """Fetches projections directly from FantasyPros API using x-api-key."""
+    """Fetches projections directly from FantasyPros API and normalizes nested payloads."""
     url = "https://api.fantasypros.com/public/v2/json/nfl/2026/projections"
     headers = {"x-api-key": FP_API_KEY}
     params = {"scoring": "PPR", "week": week_num}
     try:
         res = requests.get(url, headers=headers, params=params, timeout=10)
         if res.status_code == 200:
-            return res.json()
+            data = res.json()
+            # Normalize dictionary payloads into a flat list if wrapped
+            if isinstance(data, dict):
+                if "players" in data and isinstance(data["players"], list):
+                    return data["players"]
+                elif "projections" in data and isinstance(data["projections"], list):
+                    return data["projections"]
+                else:
+                    # Flatten nested position keys e.g. {"QB": [...], "RB": [...]}
+                    flat_list = []
+                    for val in data.values():
+                        if isinstance(val, list):
+                            flat_list.extend(val)
+                    return flat_list if flat_list else data
+            return data
+        else:
+            st.error(f"FantasyPros API Returned Status Code: {res.status_code}")
     except Exception as e:
         st.error(f"Error fetching FantasyPros projections: {e}")
-    return {}
+    return []
 
 players_db = fetch_nfl_players()
 
@@ -344,6 +360,15 @@ with tab_players:
         # Fetch exclusively from FantasyPros API
         fp_projections = fetch_fp_projections(p_week_num)
 
+        # --- DEBUG INSPECTOR ---
+        with st.expander("🔍 Debug: Inspect FantasyPros Raw Response"):
+            st.write("Returned Data Type:", type(fp_projections))
+            if isinstance(fp_projections, list) and len(fp_projections) > 0:
+                st.write(f"Total Players Returned: {len(fp_projections)}")
+                st.json(fp_projections[:2])
+            else:
+                st.write("Raw Payload:", fp_projections)
+
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
@@ -354,11 +379,12 @@ with tab_players:
                 p_proj = 0.0
                 p_avg = 0.0
                 
-                # Match player against FantasyPros output payload
+                # Flexible field matching against FantasyPros output array
                 if isinstance(fp_projections, list):
-                    match = next((item for item in fp_projections if item.get("player_name") == full_name), None)
+                    match = next((item for item in fp_projections if item.get("player_name") == full_name or item.get("name") == full_name), None)
                     if match:
-                        p_proj = float(match.get("fpts", 0.0) or 0.0)
+                        raw_pts = match.get("fpts") or match.get("fantasy_points") or match.get("pts_ppr") or 0.0
+                        p_proj = float(raw_pts)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
