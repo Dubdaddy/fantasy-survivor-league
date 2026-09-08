@@ -4,6 +4,7 @@ import os
 import random
 import time
 import requests
+import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -132,6 +133,14 @@ if "picks" not in st.session_state:
     st.session_state["picks"] = load_picks()
 
 # --- HELPER FUNCTIONS ---
+def clean_name(name):
+    """Normalize names by removing suffixes, punctuation, and extra spaces."""
+    if not name:
+        return ""
+    name = re.sub(r"[.'\"-]", "", name)
+    name = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", name, flags=re.IGNORECASE)
+    return " ".join(name.lower().split())
+
 def get_used_teams(player, season=1):
     weeks = range(1, 9) if season == 1 else range(9, 17)
     used = []
@@ -162,30 +171,29 @@ def fetch_nfl_state():
     return {"season": "2026", "week": 1}
 
 @st.cache_data(ttl=300)
-def fetch_fp_projections_v2(week_num):
-    """Fetches projections directly from FantasyPros API with cache refresh."""
+def fetch_fp_projections_v3(week_num):
+    """Loops across positions to build a complete FantasyPros projection list."""
     url = "https://api.fantasypros.com/public/v2/json/nfl/2026/projections"
     headers = {"x-api-key": FP_API_KEY}
-    params = {"scoring": "PPR", "week": week_num}
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            if isinstance(data, dict):
-                if "players" in data and isinstance(data["players"], list):
-                    return data["players"]
-                elif "projections" in data and isinstance(data["projections"], list):
-                    return data["projections"]
-                else:
-                    flat_list = []
-                    for val in data.values():
-                        if isinstance(val, list):
-                            flat_list.extend(val)
-                    return flat_list if flat_list else data
-            return data
-    except Exception as e:
-        st.error(f"Error fetching FantasyPros projections: {e}")
-    return []
+    positions = ["QB", "RB", "WR", "TE", "K", "DST"]
+    all_players = []
+
+    for pos in positions:
+        params = {"scoring": "PPR", "week": week_num, "position": pos}
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=5)
+            if res.status_code == 200:
+                data = res.json()
+                if isinstance(data, list):
+                    all_players.extend(data)
+                elif isinstance(data, dict):
+                    if "players" in data and isinstance(data["players"], list):
+                        all_players.extend(data["players"])
+                    elif "projections" in data and isinstance(data["projections"], list):
+                        all_players.extend(data["projections"])
+        except Exception:
+            continue
+    return all_players
 
 players_db = fetch_nfl_players()
 
@@ -353,21 +361,25 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch directly using v2 refreshed cache
-        fp_projections = fetch_fp_projections_v2(p_week_num)
+        # Fetch directly using position loops & refreshed cache
+        fp_projections = fetch_fp_projections_v3(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
-                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
+                raw_full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
+                norm_full_name = clean_name(raw_full_name)
                 rank_val = pdata.get("search_rank")
                 
                 p_proj = 0.0
                 p_avg = 0.0
                 
                 if isinstance(fp_projections, list):
-                    match = next((item for item in fp_projections if item.get("name") == full_name or item.get("player_name") == full_name), None)
+                    match = next(
+                        (item for item in fp_projections if clean_name(item.get("name")) == norm_full_name or clean_name(item.get("player_name")) == norm_full_name),
+                        None
+                    )
                     if match:
                         stats = match.get("stats", {})
                         if isinstance(stats, dict):
@@ -392,7 +404,7 @@ with tab_players:
 
                 team_players.append({
                     "ID": pid,
-                    "Name": full_name,
+                    "Name": raw_full_name,
                     "Position": pdata.get("position"),
                     "DepthRole": depth_str,
                     "TeamMatchup": team_opp_str,
