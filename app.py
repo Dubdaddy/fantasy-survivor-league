@@ -161,9 +161,9 @@ def fetch_nfl_state():
         pass
     return {"season": "2026", "week": 1}
 
-@st.cache_data(ttl=900)
-def fetch_fp_projections(week_num):
-    """Fetches projections directly from FantasyPros API."""
+@st.cache_data(ttl=300)
+def fetch_fp_projections_v2(week_num):
+    """Fetches projections directly from FantasyPros API with cache refresh."""
     url = "https://api.fantasypros.com/public/v2/json/nfl/2026/projections"
     headers = {"x-api-key": FP_API_KEY}
     params = {"scoring": "PPR", "week": week_num}
@@ -353,8 +353,8 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        # Fetch exclusively from FantasyPros API
-        fp_projections = fetch_fp_projections(p_week_num)
+        # Fetch directly using v2 refreshed cache
+        fp_projections = fetch_fp_projections_v2(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
@@ -366,32 +366,29 @@ with tab_players:
                 p_proj = 0.0
                 p_avg = 0.0
                 
-                # Parsed directly from FantasyPros stats.points_ppr payload
                 if isinstance(fp_projections, list):
                     match = next((item for item in fp_projections if item.get("name") == full_name or item.get("player_name") == full_name), None)
                     if match:
                         stats = match.get("stats", {})
-                        raw_pts = stats.get("points_ppr") or stats.get("points") or match.get("fpts") or 0.0
-                        p_proj = float(raw_pts)
+                        if isinstance(stats, dict):
+                            raw_pts = stats.get("points_ppr") or stats.get("points") or match.get("fpts") or 0.0
+                            try:
+                                p_proj = float(raw_pts)
+                            except (ValueError, TypeError):
+                                p_proj = 0.0
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
                     headshot_url = f"https://sleepercdn.com/images/team_logos/nfl/{team_code.lower()}.png"
 
-                # Depth Chart Rank
                 depth_order = pdata.get("depth_chart_order")
                 depth_str = f"{pdata.get('position')}{depth_order}" if depth_order else pdata.get("position")
 
-                # Clean Weekly Opponent Matchup
                 opp_matchup = WEEK_1_MATCHUPS.get(team_code, "")
                 team_opp_str = f"{team_code} {opp_matchup}".strip()
 
-                # Injury Status
                 injury_status = pdata.get("injury_status")
-                if not injury_status:
-                    status_str = "Healthy"
-                else:
-                    status_str = str(injury_status).capitalize()
+                status_str = "Healthy" if not injury_status else str(injury_status).capitalize()
 
                 team_players.append({
                     "ID": pid,
@@ -424,7 +421,6 @@ with tab_players:
                                 with col_img:
                                     st.image(p["Headshot"], width=115)
                                     
-                                    # Color-coded injury status badge
                                     if p["Status"] == "Healthy":
                                         st.caption(f"🟢 **{p['Status']}**")
                                     elif p["Status"] in ["Questionable", "Doubtful"]:
