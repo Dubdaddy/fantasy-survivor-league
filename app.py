@@ -4,6 +4,7 @@ import os
 import random
 import time
 import requests
+import re
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
@@ -131,6 +132,14 @@ if "picks" not in st.session_state:
     st.session_state["picks"] = load_picks()
 
 # --- HELPER FUNCTIONS ---
+def clean_name(name):
+    """Normalize names by removing suffixes, punctuation, and extra spaces."""
+    if not name:
+        return ""
+    name = re.sub(r"[.'\"-]", "", name)
+    name = re.sub(r"\b(jr|sr|ii|iii|iv|v)\b", "", name, flags=re.IGNORECASE)
+    return " ".join(name.lower().split())
+
 def get_used_teams(player, season=1):
     weeks = range(1, 9) if season == 1 else range(9, 17)
     used = []
@@ -150,16 +159,37 @@ def fetch_nfl_players():
     return {}
 
 @st.cache_data(ttl=900)
-def fetch_2026_projections(week_num):
-    """Fetches active 2026 weekly projections mapped directly to Sleeper Player IDs."""
-    url = "https://raw.githubusercontent.com/dynastyprocess/data/main/files/db_fpts_proj_2026.json"
+def fetch_espn_2026_projections(week_num):
+    """Fetches live 2026 weekly projections directly from ESPN's public fantasy API."""
+    url = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/2026/segments/0/leaguedefaults/3?view=kona_player_info"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "x-fantasy-filter": json.dumps({
+            "players": {
+                "filterSlotIds": {"value": [0, 2, 4, 6, 16, 17]}, # QB, RB, WR, TE, K, D/ST
+                "limit": 500,
+                "sortApplied": True,
+                "sortDraftRanks": {"sortPriority": 1, "sortAsc": True}
+            }
+        })
+    }
+    proj_dict = {}
     try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            for p in data.get("players", []):
+                player_obj = p.get("player", {})
+                p_name = clean_name(player_obj.get("fullName"))
+                
+                # Extract projected score for current week
+                for stat in player_obj.get("stats", []):
+                    if stat.get("statSourceId") == 1 and stat.get("scoringPeriodId") == week_num:
+                        proj_dict[p_name] = round(float(stat.get("appliedTotal", 0.0)), 2)
+                        break
     except Exception:
         pass
-    return {}
+    return proj_dict
 
 players_db = fetch_nfl_players()
 
@@ -327,20 +357,18 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        proj_2026 = fetch_2026_projections(p_week_num)
+        espn_projections = fetch_espn_2026_projections(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
             team_code = pdata.get("team")
             if team_code in active_teams and pdata.get("active"):
-                full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
+                raw_full_name = f"{pdata.get('first_name')} {pdata.get('last_name')}"
+                norm_name = clean_name(raw_full_name)
                 rank_val = pdata.get("search_rank")
                 
-                p_proj = 0.0
+                p_proj = espn_projections.get(norm_name, 0.0)
                 p_avg = 0.0
-                
-                if str(pid) in proj_2026:
-                    p_proj = float(proj_2026[str(pid)].get("ppr", 0.0) or 0.0)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
@@ -357,7 +385,7 @@ with tab_players:
 
                 team_players.append({
                     "ID": pid,
-                    "Name": full_name,
+                    "Name": raw_full_name,
                     "Position": pdata.get("position"),
                     "DepthRole": depth_str,
                     "TeamMatchup": team_opp_str,
