@@ -138,25 +138,6 @@ def get_used_teams(player, season=1):
         used.extend(st.session_state["picks"][player][f"Week {w}"])
     return used
 
-def calculate_ppr_from_stats(stats_dict):
-    if not stats_dict:
-        return 0.0
-    if "pts_ppr" in stats_dict and stats_dict["pts_ppr"] is not None:
-        return float(stats_dict["pts_ppr"])
-    if "pts_half_ppr" in stats_dict and stats_dict["pts_half_ppr"] is not None:
-        return float(stats_dict["pts_half_ppr"])
-
-    pts = 0.0
-    pts += float(stats_dict.get("pass_yd", 0) or 0) * 0.04
-    pts += float(stats_dict.get("pass_td", 0) or 0) * 4.0
-    pts -= float(stats_dict.get("pass_int", 0) or 0) * 2.0
-    pts += float(stats_dict.get("rush_yd", 0) or 0) * 0.1
-    pts += float(stats_dict.get("rush_td", 0) or 0) * 6.0
-    pts += float(stats_dict.get("rec", 0) or 0) * 1.0
-    pts += float(stats_dict.get("rec_yd", 0) or 0) * 0.1
-    pts += float(stats_dict.get("rec_td", 0) or 0) * 6.0
-    return round(pts, 2)
-
 @st.cache_data(ttl=3600)
 def fetch_nfl_players():
     url = "https://api.sleeper.app/v1/players/nfl"
@@ -168,21 +149,10 @@ def fetch_nfl_players():
         pass
     return {}
 
-@st.cache_data(ttl=1800)
-def fetch_nfl_state():
-    url = "https://api.sleeper.app/v1/state/nfl"
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-    except Exception:
-        pass
-    return {"season": "2026", "week": 1}
-
 @st.cache_data(ttl=900)
-def fetch_sleeper_projections(season_year, week_num):
-    """Fetches weekly projections directly from Sleeper API."""
-    url = f"https://api.sleeper.app/v1/projections/nfl/regular/{season_year}/{week_num}"
+def fetch_2026_projections(week_num):
+    """Fetches active 2026 weekly projections mapped directly to Sleeper Player IDs."""
+    url = "https://raw.githubusercontent.com/dynastyprocess/data/main/files/db_fpts_proj_2026.json"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
@@ -357,19 +327,7 @@ with tab_players:
     else:
         st.caption(f"Showing top players for **{p_user}**'s teams: **{', '.join(active_teams)}**")
         
-        nfl_state = fetch_nfl_state()
-        season_year = nfl_state.get("season", "2026")
-
-        # Fetch directly from Sleeper API
-        sleeper_projections = fetch_sleeper_projections(season_year, p_week_num)
-
-        # --- SLEEPER API DEBUG INSPECTOR ---
-        with st.expander("🔍 Debug: Inspect Sleeper Projections Payload"):
-            st.write(f"Sleeper Projections Count: {len(sleeper_projections)}")
-            if sleeper_projections:
-                first_key = list(sleeper_projections.keys())[0]
-                st.write(f"Sample Entry for Player ID `{first_key}`:")
-                st.json(sleeper_projections[first_key])
+        proj_2026 = fetch_2026_projections(p_week_num)
 
         team_players = []
         for pid, pdata in players_db.items():
@@ -381,12 +339,8 @@ with tab_players:
                 p_proj = 0.0
                 p_avg = 0.0
                 
-                # Match against Sleeper projections dictionary by Player ID
-                if str(pid) in sleeper_projections:
-                    p_stats = sleeper_projections[str(pid)].get("stats", {})
-                    p_proj = calculate_ppr_from_stats(p_stats)
-                    if "pts_ppr_avg" in p_stats and p_stats["pts_ppr_avg"] is not None:
-                        p_avg = float(p_stats["pts_ppr_avg"])
+                if str(pid) in proj_2026:
+                    p_proj = float(proj_2026[str(pid)].get("ppr", 0.0) or 0.0)
 
                 headshot_url = f"https://sleepercdn.com/content/nfl/players/{pid}.jpg"
                 if pdata.get("position") == "DEF":
